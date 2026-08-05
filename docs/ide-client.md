@@ -68,6 +68,8 @@ The service you receive:
 | Member                                                            | Description                                                                              |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `registerAdapter(adapter)`                                        | Registers it and returns a `Disposable`.                                                 |
+| `adaptersForEditor(editor)`                                       | Every registered adapter that serves that editor, whether or not a server is running.    |
+| `onDidChangeAdapters(fn)`                                         | `{ adapter, registered }` whenever an adapter is registered or unregistered.             |
 | `sessionForEditor(editor)`                                        | The session serving that editor, or `null`. May still be starting.                       |
 | `activeSessionForEditor(editor)`                                  | Resolves once the session has finished starting; `null` when absent, failed, or stopped. |
 | `getSessions()`                                                   | Every session.                                                                           |
@@ -120,6 +122,8 @@ A `"project-root"` server that declares `workspace.workspaceFolders.supported` *
 `getSessions()` returns each server once however many folders it answers for.
 
 `sessionForEditor` may hand back a session that is still starting. Await `activeSessionForEditor` when the next thing you do is a request.
+
+`adaptersForEditor` answers a different question, and it is the one a package outside the hub usually has: is anything already covering this editor? It reads the registration rather than the session, so it is settled the moment the adapter package activates and does not flicker while a server starts, dies, or is restarted. A linter that shells out to the same tool a server serves — `linter-ruff` beside `ide-ruff` — asks this, matches an adapter `id`, and returns no messages for that editor rather than reporting every violation twice. Pair it with `onDidChangeAdapters`, since an adapter that registers after the editor was last handled leaves the duplicate on screen until something asks for another pass.
 
 The `languageId` sent to the server is resolved in order: `languageIdForScope(scopeName)`, then the built-in scope table, then the blanket `languageId`. Override only the level you actually need.
 

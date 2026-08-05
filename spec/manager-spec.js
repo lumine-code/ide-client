@@ -22,6 +22,31 @@ describe("LanguageServerManager adapters", () => {
     registration.dispose();
     expect(manager.adapters.has("test")).toBe(false);
   });
+  it("reports which adapters cover an editor, and says when the set changes", async () => {
+    // What a package that stands down while a server covers the same ground
+    // reads: the registration, not a session, so it is settled before any
+    // server has started.
+    const adapter = {
+      id: "test",
+      displayName: "Test",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => null,
+    };
+    const editor = { getGrammar: () => ({ scopeName: "source.test" }), getPath: () => null };
+    const other = { getGrammar: () => ({ scopeName: "source.other" }), getPath: () => null };
+    const changes = [];
+    manager.onDidChangeAdapters((event) => changes.push(event));
+
+    expect(manager.adaptersForEditor(editor)).toEqual([]);
+    manager.registerAdapter(adapter);
+    expect(manager.adaptersForEditor(editor)).toEqual([adapter]);
+    expect(manager.adaptersForEditor(other)).toEqual([]);
+    expect(changes).toEqual([{ adapter, registered: true }]);
+
+    await manager.unregisterAdapter(adapter);
+    expect(manager.adaptersForEditor(editor)).toEqual([]);
+    expect(changes[1]).toEqual({ adapter, registered: false });
+  });
 });
 
 describe("LanguageServerManager session lifetime", () => {
