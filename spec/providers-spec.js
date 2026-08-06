@@ -15,8 +15,8 @@ const managerWith = (...args) => {
     allGrammarScopes: () => ["source.js"],
     activeSessionsForEditor: async () => sessions,
     activeSessionForEditor: async () => sessions[0] || null,
-    activeSessionForFeature: async (editor, method) =>
-      sessions.find((session) => session.supports(method, editor)) || null,
+    activeSessionForFeature: async (editor, method, feature) =>
+      sessions.find((session) => session.supports(method, editor, feature)) || null,
     sessions: new Map(sessions.map((session, index) => [`key-${index}`, session])),
     allSessions() {
       return [...new Set(this.sessions.values())];

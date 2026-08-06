@@ -26,6 +26,7 @@ const makeManager = (session) => {
     activeSessionForFeature: async () => session,
     onDidRequestRefresh: (fn) => emitter.on("refresh", fn),
     onDidChangeSession: (fn) => emitter.on("session", fn),
+    onDidChangeFeatures: (fn) => emitter.on("features", fn),
     requestRefresh: (refreshSession, kind) =>
       emitter.emit("refresh", { session: refreshSession, kind }),
   };

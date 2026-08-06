@@ -46,6 +46,7 @@ interface LanguageServerAdapter {
   getSettings?(): unknown;
   settingsKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
+  features?: Partial<Record<LanguageServerFeature, boolean>>;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   restoreDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   transformServerCapabilities?(caps: Record<string, unknown>): Record<string, unknown>;
@@ -76,6 +77,8 @@ The service you receive:
 | `request(editor, method, params, opts)`                           | Sends an arbitrary LSP request through that editor's session. See the options below.     |
 | `onDidChangeSession(fn)`                                          | `{ session, state, error? }` on every state transition.                                  |
 | `onDidPublishDiagnostics(fn)`                                     | Raw `textDocument/publishDiagnostics` payloads.                                          |
+| `onDidChangeFeatures(fn)`                                         | `{ adapter }` when one of an adapter's feature switches changes.                         |
+| `featureEnabled(adapter, feature, editor?)`                       | Whether that feature is on for that adapter, in that editor's scope.                     |
 | `onDidLog(fn)`, `getLog(adapterId)`                               | Server stderr and protocol log.                                                          |
 | `restart(session)`, `stop(session)`                               | Lifecycle control.                                                                       |
 | `applyWorkspaceEdit(edit, label)`                                 | Applies an LSP `WorkspaceEdit` to the workspace.                                         |
@@ -131,7 +134,41 @@ The `languageId` sent to the server is resolved in order: `languageIdForScope(sc
 
 `transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
 
-`session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize.
+`session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
+
+## Features
+
+More than one adapter commonly covers one grammar — a type checker beside a linter — and for the requests whose answers cannot be merged the hub has to pick one server. Left to itself it picks whichever adapter registered first, which is package activation order and says nothing about which server the user wants. The feature switches are how that choice is expressed: a switched-off server is skipped, and the next one that can serve the request answers instead.
+
+The vocabulary is `diagnostics`, `autocomplete`, `hover`, `signature`, `definition`, `references`, `symbols`, `outline`, `format`, `rename`, `codeActions`, `inlayHints`, `codeLens`, and `semanticTokens`. They are names for what the user sees, not protocol methods: one switch covers all three formatting requests, and `symbols` and `outline` split `textDocument/documentSymbol` between go-to-symbol and the outline panel.
+
+Declare them in your `package.json` under `features`, listing **only what your server actually advertises** — a switch for a capability the server never had is a control that does nothing:
+
+```json
+{
+  "configSchema": {
+    "features": {
+      "title": "Features",
+      "description": "Which parts of this server the editor uses.",
+      "type": "object",
+      "properties": {
+        "hover": {
+          "title": "Hover",
+          "description": "Show this server's documentation on hover.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  }
+}
+```
+
+The hub reads `<adapter id>.features.<name>`, so the key path follows from your `id` and nothing has to be registered. Every switch is read through the editor's scope, so a user can override one per language. A feature nobody named is on.
+
+The `features` field on the adapter object is the fallback for an adapter with no config namespace — a custom server from `language-servers.json`, whose id carries a colon. A package should use `configSchema`, which the user can actually change; that wins over the field.
+
+`diagnostics` is the odd one: they are pushed rather than requested, so switching it off hides what the server sent rather than stopping it being sent, and switching it back on restores it without a restart.
 
 `transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
 

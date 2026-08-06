@@ -8,6 +8,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 
 - **Sessions**: starts one language server per project root, or one per workspace, lazily when a matching editor opens.
 - **Several servers per file**: every adapter matching a grammar runs, so a type checker and a linter serve the same buffer together.
+- **Feature switches**: each adapter package can turn individual capabilities off for its own server, which is also how one of two servers is chosen to format, rename, or fill the outline.
 - **Overlap removal**: answers that several servers repeat, such as a shared signature line, are shown once.
 - **Transports**: spawns servers over stdio, IPC, or socket connections with JSON-RPC framing.
 - **Synchronization**: keeps open documents in sync with incremental or full-text updates.
@@ -66,7 +67,7 @@ Commands are spawned directly with `shell: false`; arguments belong in `args`. T
 
 ## Configuration
 
-Any language server can be wired without an adapter package through `language-servers.json` in the configuration directory (open it with `ide-client:open-custom-servers-file`). Each entry needs a `command` and grammar `scopes`; `args`, `languageId`, `sessionScope`, `transport`, `env`, `initializationOptions`, and `settings` are optional. `settings` feeds both `workspace/configuration` lookups and the configuration push after startup:
+Any language server can be wired without an adapter package through `language-servers.json` in the configuration directory (open it with `ide-client:open-custom-servers-file`). Each entry needs a `command` and grammar `scopes`; `args`, `languageId`, `sessionScope`, `transport`, `env`, `initializationOptions`, `settings`, and `features` are optional. `settings` feeds both `workspace/configuration` lookups and the configuration push after startup, and `features` switches individual capabilities off — an adapter package holds the same switches in its own settings, but a custom server has no settings page to put them on:
 
 ```json
 {
@@ -74,7 +75,8 @@ Any language server can be wired without an adapter package through `language-se
     "command": "gopls",
     "args": ["serve"],
     "scopes": ["source.go"],
-    "settings": { "gopls": { "usePlaceholders": true } }
+    "settings": { "gopls": { "usePlaceholders": true } },
+    "features": { "inlayHints": false }
   }
 }
 ```
