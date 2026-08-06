@@ -136,6 +136,8 @@ The `languageId` sent to the server is resolved in order: `languageIdForScope(sc
 
 `session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
 
+`transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
+
 ## Features
 
 More than one adapter commonly covers one grammar — a type checker beside a linter — and for the requests whose answers cannot be merged the hub has to pick one server. Left to itself it picks whichever adapter registered first, which is package activation order and says nothing about which server the user wants. The feature switches are how that choice is expressed: a switched-off server is skipped, and the next one that can serve the request answers instead.
@@ -169,8 +171,6 @@ The hub reads `<adapter id>.features.<name>`, so the key path follows from your 
 The `features` field on the adapter object is the fallback for an adapter with no config namespace — a custom server from `language-servers.json`, whose id carries a colon. A package should use `configSchema`, which the user can actually change; that wins over the field.
 
 `diagnostics` is the odd one: they are pushed rather than requested, so switching it off hides what the server sent rather than stopping it being sent, and switching it back on restores it without a restart.
-
-`transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
 
 ## Teardown
 
