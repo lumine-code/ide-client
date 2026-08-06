@@ -13,7 +13,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Synchronization**: keeps open documents in sync with incremental or full-text updates.
 - **Diagnostics**: forwards server diagnostics to the linter package when installed.
 - **Completions**: serves language-server completions to autocomplete.
-- **Symbols**: serves document and project symbols to symbols-view.
+- **Symbols**: serves document and project symbols to the symbol hub.
 - **Inlay hints**: renders inline type and parameter-name labels for the visible part of the editor.
 - **Code lens**: shows actionable command links above symbols; disabled by default.
 - **Semantic tokens**: layers server-computed highlighting over the grammar's own; disabled by default.
@@ -106,7 +106,7 @@ doing, but it carries `has-starting` and `has-failed` so you can say otherwise:
 
 - **[ide-client](docs/ide-client.md)** (`1.0.0`): provided to adapter packages to register language servers and reach sessions.
 - **autocomplete.provider** (`1.0.0`): provided to autocomplete to serve language-server completions.
-- **symbol.provider** (`1.0.0`): provided to symbols-view to serve document and project symbols.
+- **symbol.provider** (`1.0.0`): provided to the symbol hub to serve document and project symbols.
 - **hover.provider** (`1.0.0`): provided to hover UIs to serve documentation at a buffer position.
 - **hover.signature-provider** (`1.0.0`): provided to signature-help UIs to serve call signatures while typing.
 - **outline.provider** (`1.0.0`): provided to outline UIs to serve the hierarchical document outline.
