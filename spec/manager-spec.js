@@ -549,6 +549,42 @@ describe("LanguageServerManager restart", () => {
   });
   afterEach(async () => manager.deactivate());
 
+  it("says so once when a server has exited more often than it may be restarted", () => {
+    // Giving up was silent: the retries stopped, the status item read "failed",
+    // and the reason sat unread in the log.
+    atom.config.set("ide-client.restartLimit", 2);
+    const session = {
+      adapter: { id: "test", displayName: "Test Language Server" },
+      restartCount: 2,
+      state: "failed",
+    };
+    const exhausted = [];
+    manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
+
+    manager.scheduleRestart(session);
+    // Every later exit reaches this again; the user is told once.
+    manager.scheduleRestart(session);
+    manager.scheduleRestart(session);
+
+    expect(exhausted).toEqual([session]);
+    atom.config.unset("ide-client.restartLimit");
+  });
+
+  it("keeps quiet while it still has restarts left", () => {
+    atom.config.set("ide-client.restartLimit", 3);
+    const session = {
+      adapter: { id: "test", displayName: "Test Language Server" },
+      restartCount: 0,
+      state: "failed",
+    };
+    const exhausted = [];
+    manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
+    manager.scheduleRestart(session);
+    expect(exhausted).toEqual([]);
+    expect(session.restartCount).toBe(1);
+    atom.config.unset("ide-client.restartLimit");
+  });
+
   it("declines to restart a server the adapter says is not installed", async () => {
     // `null` is the documented way for an adapter to say the binary is gone,
     // and attaching honours it by starting nothing. Restarting used to build a

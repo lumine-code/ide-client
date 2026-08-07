@@ -150,4 +150,32 @@ describe("ide-client package", () => {
     expect(indieConfig.markerInvalidation).toBe("never");
     registration.dispose();
   });
+
+  it("says why a server that keeps dying has stopped, and offers its log", async () => {
+    // The whole point is that the reason is in the log and nothing said to look
+    // there, so the notification is only useful if it carries the way in.
+    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    spyOn(atom.notifications, "addError");
+    spyOn(main, "showLogForAdapter");
+    atom.config.set("ide-client.restartLimit", 1);
+
+    const session = {
+      adapter: { id: "ide-example", displayName: "Example Language Server" },
+      restartCount: 1,
+      state: "failed",
+    };
+    // Through the manager, so this covers the subscription rather than the
+    // method: deleting the wiring in activate() has to fail this.
+    main.manager.scheduleRestart(session);
+
+    expect(atom.notifications.addError).toHaveBeenCalled();
+    const [title, options] = atom.notifications.addError.calls.mostRecent().args;
+    expect(title).toContain("Example Language Server");
+    expect(options.description).toContain("restarted 1 time");
+    expect(options.buttons.map((button) => button.text)).toEqual(["Open Log"]);
+
+    options.buttons[0].onDidClick();
+    expect(main.showLogForAdapter).toHaveBeenCalledWith("ide-example");
+    atom.config.unset("ide-client.restartLimit");
+  });
 });

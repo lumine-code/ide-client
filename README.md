@@ -21,7 +21,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Server list**: lists every running server with its state and what it covers — a project root, the workspace, or a file opened outside the project — and restarts, stops, or opens the log of any of them without leaving the list.
 - **Server details**: reports what a server says about itself — the process it runs in, the command that started it, the documents and diagnostics it holds, and the capabilities it advertised.
 - **Status bar**: counts the running servers in a permanent status-bar item, flags the failed ones, and opens the server list on click.
-- **Logging**: keeps a per-server log buffer with optional protocol tracing.
+- **Logging**: keeps a per-server log buffer with optional protocol tracing, and reports a server that has exited more often than it may be restarted with a way straight into its log.
 
 ## Installation
 
