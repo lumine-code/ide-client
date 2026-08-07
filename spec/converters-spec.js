@@ -13,6 +13,33 @@ describe("ide-client converters", () => {
       [3, 4],
     ]);
   });
+  describe("uriKey", () => {
+    // The same file has more than one correct URI. Pyright echoes back
+    // `file:///c%3A/…ASILOI~1/…` for the `file:///C:/…ASILOI%7E1/…` it was
+    // given, and as raw strings those are two different map keys.
+    it("agrees across the spellings a server may choose", () => {
+      const client = "file:///C:/Users/ASILOI%7E1/AppData/Local/project/greeter.py";
+      const server = "file:///c%3A/Users/ASILOI~1/AppData/Local/project/greeter.py";
+      expect(client).not.toBe(server);
+      expect(C.uriKey(client)).toBe(C.uriKey(server));
+    });
+    it("folds only the drive letter", () => {
+      // Everything after it is a path the filesystem may well distinguish.
+      expect(C.uriKey("file:///c:/Project/File.py")).toBe(C.uriKey("file:///C:/Project/File.py"));
+      expect(C.uriKey("file:///C:/Project/File.py")).not.toBe(
+        C.uriKey("file:///C:/project/file.py"),
+      );
+    });
+    it("keeps a non-file URI as it is, and never returns undefined", () => {
+      expect(C.uriKey("untitled:Untitled-1")).toBe("untitled:Untitled-1");
+      expect(C.uriKey(undefined)).toBe("");
+    });
+    it("is idempotent, so a key can be re-keyed harmlessly", () => {
+      const key = C.uriKey("file:///C:/Project/File.py");
+      expect(C.uriKey(key)).toBe(key);
+    });
+  });
+
   it("maps every LSP completion kind, unshifted", () => {
     // The kinds that used to be shifted by one: 20 read as "constant",
     // 21 as "struct", 22 as "event".

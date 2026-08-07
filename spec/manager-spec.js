@@ -1,6 +1,7 @@
 const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
 const { languageIdForEditor } = require("../lib/language-ids");
+const C = require("../lib/converters");
 
 describe("LanguageServerManager adapters", () => {
   let manager;
@@ -136,7 +137,7 @@ describe("LanguageServerManager session lifetime", () => {
     // Attached to a session keyed to its own directory, as it would be when
     // opened before any project folder existed.
     const loose = sessionAt(path.dirname(filePath));
-    loose.documents.set(require("url").pathToFileURL(filePath).href, {});
+    loose.documents.set(C.uriKey(require("url").pathToFileURL(filePath).href), {});
     spyOn(manager, "reattachEditor");
 
     manager.rerouteEditorsToTheirRoots();
@@ -155,7 +156,7 @@ describe("LanguageServerManager session lifetime", () => {
     });
     const root = atom.project.getPaths()[0];
     const session = sessionAt(root);
-    session.documents.set(require("url").pathToFileURL(filePath).href, {});
+    session.documents.set(C.uriKey(require("url").pathToFileURL(filePath).href), {});
     spyOn(manager, "reattachEditor");
     spyOn(manager, "attachEditor");
 
@@ -429,7 +430,9 @@ describe("LanguageServerManager diagnostics", () => {
 
   beforeEach(() => {
     manager = new LanguageServerManager();
-    session = { documents: new Map([[uri, { version: 4 }]]) };
+    // Keyed the way a real session keys it, so a server's own spelling of the
+    // same file finds this document.
+    session = { documents: new Map([[C.uriKey(uri), { version: 4 }]]) };
   });
 
   afterEach(async () => manager.deactivate());
@@ -460,6 +463,39 @@ describe("LanguageServerManager diagnostics", () => {
 
     expect(manager.diagnosticsFor(session, uri)[0].message).toBe("unversioned");
     expect(manager.diagnosticsFor(session, unopened)[0].message).toBe("workspace");
+  });
+
+  it("finds them again under the client's spelling of the same file", () => {
+    // Pyright echoes `file:///c%3A/…ASILOI~1/…` for the
+    // `file:///C:/…ASILOI%7E1/…` it was given. Stored under one and looked up
+    // under the other, every lookup came back empty — which is what the
+    // intentions provider reads to give a server the diagnostic it should fix,
+    // so quick fixes were offered no context at all.
+    const fromClient = "file:///C:/Users/ASILOI%7E1/project/greeter.py";
+    const fromServer = "file:///c%3A/Users/ASILOI~1/project/greeter.py";
+    const windows = { documents: new Map([[C.uriKey(fromClient), { version: 1 }]]) };
+
+    manager.publishDiagnostics(windows, {
+      uri: fromServer,
+      diagnostics: [{ message: '"Path" is not defined' }],
+    });
+
+    expect(manager.diagnosticsFor(windows, fromClient)[0].message).toBe('"Path" is not defined');
+    expect(manager.diagnosticCountFor(windows)).toEqual({ total: 1, files: 1 });
+  });
+
+  it("reports the server's own spelling back to consumers", () => {
+    // The linter turns the URI it receives into a file path, so rewriting it to
+    // the canonical key would hand it something that is not a URI at all.
+    const published = [];
+    manager.onDidPublishDiagnostics((event) => published.push(event.uri));
+    const fromServer = "file:///c%3A/Users/ASILOI~1/project/greeter.py";
+    const windows = { documents: new Map() };
+
+    manager.publishDiagnostics(windows, { uri: fromServer, diagnostics: [{ message: "x" }] });
+    manager.clearDiagnosticsForSession(windows);
+
+    expect(published).toEqual([fromServer, fromServer]);
   });
 });
 
