@@ -542,6 +542,52 @@ describe("LanguageServerManager diagnostics", () => {
   });
 });
 
+describe("LanguageServerManager restart", () => {
+  let manager;
+  beforeEach(() => {
+    manager = new LanguageServerManager();
+  });
+  afterEach(async () => manager.deactivate());
+
+  it("declines to restart a server the adapter says is not installed", async () => {
+    // `null` is the documented way for an adapter to say the binary is gone,
+    // and attaching honours it by starting nothing. Restarting used to build a
+    // session around no launch and start it, which failed deep inside with
+    // "Cannot destructure property 'command' of 'this.launch'" — a message that
+    // says nothing about the binary.
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => null,
+    };
+    const session = {
+      adapter,
+      rootPath: path.join(path.sep, "tmp", "project"),
+      state: "running",
+      documents: new Map(),
+      folders: new Set(),
+      stop: jasmine.createSpy("stop").and.callFake(async () => {}),
+    };
+    manager.sessions.set(manager.keyFor(adapter, session.rootPath), session);
+
+    let result;
+    let thrown = null;
+    try {
+      result = await manager.restart(session);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeNull();
+    expect(result).toBeNull();
+    expect(session.stop).toHaveBeenCalled();
+    // Forgotten, so the crash-retry loop stops rather than failing forever.
+    expect(manager.keysFor(session)).toEqual([]);
+    expect(manager.getLog("test")).toContain("not available");
+  });
+});
+
 describe("LanguageServerManager teardown", () => {
   let manager;
   const add = (key, session) => {
