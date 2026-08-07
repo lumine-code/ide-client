@@ -98,4 +98,24 @@ describe("LSP diagnostics linter mapping", () => {
       messages: [],
     });
   });
+
+  describe("the path handed to the linter", () => {
+    // Everything downstream compares it against `editor.getPath()`: the panel
+    // filtering to the active file, the gutter choosing an editor. A server
+    // that spells the same file differently is not a different file, but it
+    // was a different string, so nothing was ever shown for it.
+    it("is the editor's spelling, not the server's", () => {
+      const fromServer = "file:///c%3A/Users/asiloisad/project/main.py";
+      const fromEditor = "file:///C:/Users/asiloisad/project/main.py";
+      expect(fromServer).not.toBe(fromEditor);
+      expect(toLinterMessages(fromServer, []).filePath).toBe(
+        toLinterMessages(fromEditor, []).filePath,
+      );
+    });
+
+    it("drops a URI that belongs to no file rather than inventing one", () => {
+      expect(toLinterMessages("untitled:Untitled-1", []).filePath).toBeNull();
+      expect(toLinterMessages(undefined, []).filePath).toBeNull();
+    });
+  });
 });
