@@ -30,6 +30,16 @@ describe("ide-client converters", () => {
         C.uriKey("file:///C:/project/file.py"),
       );
     });
+    it("agrees whichever platform decoded the URI", () => {
+      // A Windows file URI decodes to `C:\…` on Windows and to `/C:/…`
+      // everywhere else. Both shapes have to fold the same way, or the key
+      // matches a server's spelling on one platform and not the other — which
+      // is exactly what the first version of this did.
+      expect(C.uriKey("file:///c:/x.py")).toBe(C.uriKey("file:///C:/x.py"));
+      // A path that merely starts with a letter is not a drive.
+      expect(C.uriKey("file:///home/user/x.py")).toBe(C.uriKey("file:///home/user/x.py"));
+      expect(C.uriKey("file:///c/data/x.py")).not.toBe(C.uriKey("file:///C/data/x.py"));
+    });
     it("keeps a non-file URI as it is, and never returns undefined", () => {
       expect(C.uriKey("untitled:Untitled-1")).toBe("untitled:Untitled-1");
       expect(C.uriKey(undefined)).toBe("");
