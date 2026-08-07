@@ -27,6 +27,10 @@ const makeManager = (session) => {
     onDidRequestRefresh: (fn) => emitter.on("refresh", fn),
     onDidChangeSession: (fn) => emitter.on("session", fn),
     onDidChangeFeatures: (fn) => emitter.on("features", fn),
+    onDidChangeCapabilities: (fn) => emitter.on("capabilities", fn),
+    registerCapabilities: (target, registrations) => {
+      emitter.emit("capabilities", { session: target, registrations });
+    },
     requestRefresh: (refreshSession, kind) =>
       emitter.emit("refresh", { session: refreshSession, kind }),
   };
@@ -36,6 +40,15 @@ const makeSession = (respond, capabilities = {}) => ({
   state: "running",
   capabilities,
   supports: () => true,
+  capabilityOptions: (method) =>
+    ({
+      "textDocument/completion": capabilities.completionProvider,
+      "textDocument/signatureHelp": capabilities.signatureHelpProvider,
+      "textDocument/semanticTokens": capabilities.semanticTokensProvider,
+      "textDocument/onTypeFormatting": capabilities.documentOnTypeFormattingProvider,
+      "textDocument/codeAction": capabilities.codeActionProvider,
+      "textDocument/rename": capabilities.renameProvider,
+    })[method],
   requests: [],
   request(method, params) {
     this.requests.push({ method, params });
@@ -168,6 +181,35 @@ describe("SemanticTokens", () => {
       start: { line: 0, character: 0 },
       end: { line: 2, character: 0 },
     });
+  });
+
+  it("renders a capability the server registers after it started", async () => {
+    // Tinymist declares no semantic-token capability statically — it registers
+    // one once it is running. Nothing re-read the capabilities after startup,
+    // so the module had already concluded the server could not serve this and
+    // rendered nothing, for the life of the session.
+    atom.config.set("ide-client.semanticTokens.enabled", true);
+    const registered = { legend, full: true };
+    const session = makeSession(() => ({ data: [0, 0, 5, 0, 0] }), {});
+    // Absent at startup, reachable only through the registration afterwards.
+    session.capabilityOptions = (method) =>
+      method === "textDocument/semanticTokens" ? session.registered : undefined;
+    session.registered = undefined;
+
+    const manager = await attach(session);
+    expect(session.requests.length).toBe(0);
+    expect(editor.getElement().querySelectorAll(".ide-client-semantic-token").length).toBe(0);
+
+    session.registered = registered;
+    manager.registerCapabilities(session, [
+      { id: "reg-1", method: "textDocument/semanticTokens", registerOptions: registered },
+    ]);
+    await flush();
+
+    expect(session.requests.length).toBeGreaterThan(0);
+    expect(
+      editor.getElement().querySelectorAll(".ide-client-semantic-token").length,
+    ).toBeGreaterThan(0);
   });
 
   it("skips the feature when neither budget nor capability fits", async () => {

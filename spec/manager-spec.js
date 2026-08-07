@@ -373,6 +373,49 @@ describe("LanguageServerManager capabilities", () => {
     ).toBeUndefined();
   });
 
+  it("announces a capability that arrives after the session started", () => {
+    // The feature modules hold rendered state and only re-read on an event. A
+    // late registration that announced nothing left them concluding the server
+    // could not serve it — which is how Tinymist's semantic tokens rendered
+    // nothing at all while the server was answering perfectly.
+    const session = { adapter: { grammarScopes: ["source.typst"] } };
+    const announced = [];
+    manager.onDidChangeCapabilities((event) => announced.push(event.session));
+
+    manager.registerCapabilities(session, [
+      { id: "reg-1", method: "textDocument/semanticTokens", registerOptions: {} },
+    ]);
+    manager.unregisterCapabilities(session, [{ id: "reg-1" }]);
+    // Nothing changed, so nothing is announced.
+    manager.registerCapabilities(session, []);
+
+    expect(announced).toEqual([session, session]);
+  });
+
+  it("carries the options a dynamic registration was made with", () => {
+    // A server that registers dynamically declares nothing statically, so the
+    // legend, the trigger characters and the like live only here. Tinymist
+    // registers its semantic tokens this way, and reading `capabilities` alone
+    // found no legend, which left the feature rendering nothing at all.
+    const session = { adapter: { grammarScopes: ["source.typst"] } };
+    const legend = { tokenTypes: ["keyword", "string"], tokenModifiers: [] };
+    manager.registerCapabilities(session, [
+      { id: "reg-tokens", method: "textDocument/semanticTokens", registerOptions: { legend } },
+    ]);
+    const editor = {
+      getGrammar: () => ({ scopeName: "source.typst", name: "Typst" }),
+      getPath: () => "x.typ",
+    };
+
+    expect(manager.dynamicOptions(session, "textDocument/semanticTokens", editor).legend).toBe(
+      legend,
+    );
+    expect(manager.dynamicOptions(session, "textDocument/hover", editor)).toBeUndefined();
+
+    manager.unregisterCapabilities(session, [{ id: "reg-tokens" }]);
+    expect(manager.dynamicOptions(session, "textDocument/semanticTokens", editor)).toBeUndefined();
+  });
+
   it("routes watched-file events through registered watchers", () => {
     const notifications = [];
     const session = {

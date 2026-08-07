@@ -13,6 +13,15 @@ const sessionWith = (respond, capabilities = { completionProvider: {} }) => ({
   state: "running",
   capabilities,
   supports: () => true,
+  capabilityOptions: (method) =>
+    ({
+      "textDocument/completion": capabilities.completionProvider,
+      "textDocument/signatureHelp": capabilities.signatureHelpProvider,
+      "textDocument/semanticTokens": capabilities.semanticTokensProvider,
+      "textDocument/onTypeFormatting": capabilities.documentOnTypeFormattingProvider,
+      "textDocument/codeAction": capabilities.codeActionProvider,
+      "textDocument/rename": capabilities.renameProvider,
+    })[method],
   requests: [],
   async request(method, params, options) {
     this.requests.push({ method, params, options });

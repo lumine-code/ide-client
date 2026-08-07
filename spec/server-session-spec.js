@@ -258,6 +258,35 @@ describe("ServerSession against a fake server", () => {
     expect(session.supports("textDocument/rename", jsEditor)).toBe(false);
   });
 
+  it("resolves capability options from a dynamic registration, then the static one", async () => {
+    // Tinymist declares no semantic-token capability statically and registers
+    // one instead, so its legend is reachable only through the registration.
+    // Read from `capabilities` alone it is absent, and the feature renders
+    // nothing while looking perfectly healthy.
+    const legend = { tokenTypes: ["keyword"], tokenModifiers: [] };
+    const session = await startSession({
+      capabilities: { completionProvider: { triggerCharacters: ["."] } },
+    });
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 998,
+      method: "client/registerCapability",
+      params: {
+        registrations: [
+          { id: "reg-tokens", method: "textDocument/semanticTokens", registerOptions: { legend } },
+        ],
+      },
+    });
+    await until(() => manager.dynamicCapabilities.has(session));
+
+    expect(session.capabilities.semanticTokensProvider).toBeUndefined();
+    expect(session.capabilityOptions("textDocument/semanticTokens").legend).toEqual(legend);
+    // The static capability still answers where there is no registration.
+    expect(session.capabilityOptions("textDocument/completion").triggerCharacters).toEqual(["."]);
+    // `true` says "served, with nothing to configure", which is not options.
+    expect(session.capabilityOptions("textDocument/hover")).toBeUndefined();
+  });
+
   // Pyright wedges permanently on a cancelled find-all-references: the next one
   // fails with "this._token.cancel is not a function" for the life of the
   // server. Both methods here are ones a server supersedes or completes on its

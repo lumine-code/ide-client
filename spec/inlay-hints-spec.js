@@ -27,6 +27,10 @@ const makeManager = (session) => {
     onDidRequestRefresh: (fn) => emitter.on("refresh", fn),
     onDidChangeSession: (fn) => emitter.on("session", fn),
     onDidChangeFeatures: (fn) => emitter.on("features", fn),
+    onDidChangeCapabilities: (fn) => emitter.on("capabilities", fn),
+    registerCapabilities: (target, registrations) => {
+      emitter.emit("capabilities", { session: target, registrations });
+    },
     requestRefresh: (refreshSession, kind) =>
       emitter.emit("refresh", { session: refreshSession, kind }),
   };
@@ -36,6 +40,15 @@ const makeSession = (respond, capabilities = {}) => ({
   state: "running",
   capabilities,
   supports: () => true,
+  capabilityOptions: (method) =>
+    ({
+      "textDocument/completion": capabilities.completionProvider,
+      "textDocument/signatureHelp": capabilities.signatureHelpProvider,
+      "textDocument/semanticTokens": capabilities.semanticTokensProvider,
+      "textDocument/onTypeFormatting": capabilities.documentOnTypeFormattingProvider,
+      "textDocument/codeAction": capabilities.codeActionProvider,
+      "textDocument/rename": capabilities.renameProvider,
+    })[method],
   requests: [],
   request(method, params) {
     this.requests.push({ method, params });

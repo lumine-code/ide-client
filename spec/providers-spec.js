@@ -28,6 +28,15 @@ const sessionWith = (result, capabilities = {}) => ({
   state: "running",
   capabilities,
   supports: () => true,
+  capabilityOptions: (method) =>
+    ({
+      "textDocument/completion": capabilities.completionProvider,
+      "textDocument/signatureHelp": capabilities.signatureHelpProvider,
+      "textDocument/semanticTokens": capabilities.semanticTokensProvider,
+      "textDocument/onTypeFormatting": capabilities.documentOnTypeFormattingProvider,
+      "textDocument/codeAction": capabilities.codeActionProvider,
+      "textDocument/rename": capabilities.renameProvider,
+    })[method],
   request: async () => result,
 });
 
