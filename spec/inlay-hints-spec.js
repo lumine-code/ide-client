@@ -152,20 +152,70 @@ describe("InlayHints", () => {
     expect([...state.hints.values()][0]).toBe(keep);
   });
 
-  it("places the cursor at the hint anchor on mousedown", async () => {
-    await attach(() => [
-      { position: { line: 0, character: 11 }, label: ": number" },
-      { position: { line: 2, character: 10 }, label: " -> int" },
-    ]);
-    editor.setCursorBufferPosition([1, 0]);
-    const span = editor.getElement().querySelector(".line .ide-client-inlay-hint");
-    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
-    span.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(editor.getCursorBufferPosition().toArray()).toEqual([0, 11]);
-    const after = editor.getElement().querySelector(".line .ide-client-inlay-hint-after");
-    after.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    expect(editor.getCursorBufferPosition().toArray()).toEqual([2, 10]);
+  // The renderer resolves a point on a label to the column the label decorates
+  // all by itself: `screenPositionForPixelPosition` asks `caretRangeFromPoint`,
+  // which lands in a real text node on the line. So this package installs no
+  // mousedown handling of its own, and pressing on a label starts an ordinary
+  // drag-selection like pressing anywhere else does.
+  it("leaves a press on a hint label to the renderer, which resolves it to the anchor", async () => {
+    // The labels are pseudo-element content and occupy no space until this
+    // package's own stylesheet is loaded.
+    const styles = atom.themes.requireStylesheet(
+      path.join(__dirname, "..", "styles", "ide-client.css"),
+    );
+    try {
+      await attach(() => [
+        { position: { line: 0, character: 11 }, label: ": number" },
+        { position: { line: 2, character: 10 }, label: " -> int" },
+      ]);
+      const element = editor.getElement();
+      const { component } = element;
+      const linesRect = component.refs.lineTiles.getBoundingClientRect();
+      const cases = [
+        { selector: ".ide-client-inlay-hint", row: 0, column: 11, atEnd: false },
+        { selector: ".ide-client-inlay-hint-after", row: 2, column: 10, atEnd: true },
+      ];
+      for (const { selector, row, column, atEnd } of cases) {
+        const span = element.querySelector(`.line ${selector}`);
+        expect(span).not.toBeNull();
+        // The label occupies the side of the decorated span the character does
+        // not: ::before runs from the span's left edge up to the character,
+        // ::after from the character's right edge to the span's.
+        const spanRect = span.getBoundingClientRect();
+        const anchor = component.pixelPositionForScreenPosition({ row, column });
+        const charEdge = linesRect.left + anchor.left;
+        const from = atEnd ? charEdge : spanRect.left;
+        const to = atEnd ? spanRect.right : charEdge;
+        const clientY = linesRect.top + anchor.top + component.getLineHeight() / 2;
+        // Pixels the label draws that no character occupies...
+        expect(to - from).toBeGreaterThan(component.getBaseCharacterWidth());
+        // ...every one of which names the column the hint is anchored to.
+        for (const clientX of [from + 1, (from + to) / 2, to - 1]) {
+          const pixelPosition = component.pixelPositionForMouseEvent({ clientX, clientY });
+          expect(component.screenPositionForPixelPosition(pixelPosition).toArray()).toEqual([
+            row,
+            column,
+          ]);
+        }
+
+        editor.setCursorBufferPosition([1, 0]);
+        const event = new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          detail: 1,
+          clientX: (from + to) / 2,
+          clientY,
+        });
+        span.dispatchEvent(event);
+        window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        expect(editor.getCursorBufferPosition().toArray()).toEqual([row, column]);
+        // Nothing swallows the press, so it still begins a drag-selection.
+        expect(event.defaultPrevented).toBe(false);
+      }
+    } finally {
+      styles.dispose();
+    }
   });
 
   it("honors a per-language scoped disable", async () => {
