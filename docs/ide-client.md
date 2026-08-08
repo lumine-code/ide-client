@@ -62,7 +62,7 @@ Four fields are required:
 | `grammarScopes`          | Which editors this server serves.                                                                                              |
 | `resolveServer(context)` | Returns a `ServerLaunch`, or `null` when the server is not installed — which disables the adapter quietly rather than failing. |
 
-`ServerLaunch` is `{ command, args?, cwd?, env?, transport?, host?, port?, version? }` with `transport` one of `"stdio"` (default), `"ipc"`, or `"socket"`.
+`ServerLaunch` is `{ command, args?, cwd?, env?, transport?, host?, port?, version?, fileCancellationFolder? }` with `transport` one of `"stdio"` (default), `"ipc"`, or `"socket"`. `fileCancellationFolder` is an absolute, session-unique directory for a server that uses marker files instead of `$/cancelRequest`; `ide-client` creates it and removes it with the connection.
 
 The service you receive:
 

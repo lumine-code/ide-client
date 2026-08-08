@@ -1,4 +1,7 @@
 const { PassThrough } = require("stream");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const RpcConnection = require("../lib/rpc-connection");
 
 function frame(message) {
@@ -149,6 +152,41 @@ describe("RpcConnection", () => {
       ).toBeRejected();
       await flush();
       expect(sent(writer)).toEqual([]);
+    });
+
+    it("uses and cleans up a file cancellation channel when configured", async () => {
+      const fileReader = new PassThrough();
+      const fileWriter = new PassThrough();
+      fileWriter.chunks = [];
+      fileWriter.on("data", (chunk) => fileWriter.chunks.push(chunk));
+      const folder = path.join(
+        os.tmpdir(),
+        "ide-client-cancellation-spec",
+        `${process.pid}-${Date.now()}`,
+      );
+      const fileConnection = new RpcConnection(fileReader, fileWriter, {
+        fileCancellationFolder: folder,
+      });
+      fileConnection.listen();
+
+      try {
+        const controller = new AbortController();
+        const pending = fileConnection.request("slow", {}, { signal: controller.signal });
+        await waitUntil(() => sent(fileWriter).length === 1);
+        controller.abort();
+        await expectAsync(pending).toBeRejected();
+        const marker = path.join(folder, "cancellation-0.tmp");
+        await waitUntil(() => fs.existsSync(marker));
+        expect(sent(fileWriter).some((message) => message.method === "$/cancelRequest")).toBe(
+          false,
+        );
+
+        fileReader.write(frame({ jsonrpc: "2.0", id: 0, result: null }));
+        await waitUntil(() => !fs.existsSync(marker));
+      } finally {
+        fileConnection.dispose();
+      }
+      expect(fs.existsSync(folder)).toBe(false);
     });
   });
 

@@ -10,6 +10,8 @@ export interface ServerLaunch {
   host?: string;
   port?: number;
   version?: string;
+  /** Absolute directory for a file-based vscode-jsonrpc cancellation channel. */
+  fileCancellationFolder?: string;
 }
 export interface ServerResolutionContext {
   rootPath: string;
