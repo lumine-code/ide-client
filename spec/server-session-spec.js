@@ -138,6 +138,55 @@ describe("ServerSession against a fake server", () => {
     expect(received.some((message) => message.method === "textDocument/didClose")).toBe(true);
   });
 
+  it("sends batched incremental changes in an order that reconstructs the document", async () => {
+    const filePath = path.join(tempDir, "batched.js");
+    const original = "one\nmiddle\nlast\n";
+    fs.writeFileSync(filePath, original);
+    const session = await startSession({ capabilities: { textDocumentSync: 2 } });
+    const editor = await atom.workspace.open(filePath);
+    await session.openEditor(editor);
+
+    // An external reload is applied as one transaction with multiple hunks.
+    // The first hunk shifts the coordinates of the second one by a whole row.
+    editor.transact(() => {
+      editor.setTextInBufferRange(
+        [
+          [0, 3],
+          [0, 3],
+        ],
+        "\ninserted",
+      );
+      editor.setTextInBufferRange(
+        [
+          [3, 0],
+          [3, 4],
+        ],
+        "finished",
+      );
+    });
+
+    const received = await receivedMessages(session);
+    const didChange = received.find((message) => message.method === "textDocument/didChange");
+    expect(didChange.params.contentChanges.length).toBe(2);
+
+    // LSP servers apply contentChanges one after another. Replaying the wire
+    // representation must therefore produce exactly the text in the editor.
+    const mirror = await atom.workspace.buildTextEditor();
+    mirror.setText(original);
+    for (const change of didChange.params.contentChanges) {
+      const { start, end } = change.range;
+      mirror.setTextInBufferRange(
+        [
+          [start.line, start.character],
+          [end.line, end.character],
+        ],
+        change.text,
+      );
+    }
+    expect(mirror.getText()).toBe(editor.getText());
+    mirror.destroy();
+  });
+
   it("sends full text when the server wants full sync", async () => {
     const filePath = path.join(tempDir, "full.js");
     fs.writeFileSync(filePath, "start\n");
