@@ -114,7 +114,7 @@ describe("ServerSession against a fake server", () => {
     const filePath = path.join(tempDir, "example.js");
     fs.writeFileSync(filePath, "const one = 1;\n");
     const session = await startSession({ capabilities: { textDocumentSync: 2 } });
-    const editor = await atom.workspace.open(filePath);
+    const editor = await lumine.workspace.open(filePath);
     await session.openEditor(editor);
     editor.setTextInBufferRange(
       [
@@ -143,7 +143,7 @@ describe("ServerSession against a fake server", () => {
     const original = "one\nmiddle\nlast\n";
     fs.writeFileSync(filePath, original);
     const session = await startSession({ capabilities: { textDocumentSync: 2 } });
-    const editor = await atom.workspace.open(filePath);
+    const editor = await lumine.workspace.open(filePath);
     await session.openEditor(editor);
 
     // An external reload is applied as one transaction with multiple hunks.
@@ -171,7 +171,7 @@ describe("ServerSession against a fake server", () => {
 
     // LSP servers apply contentChanges one after another. Replaying the wire
     // representation must therefore produce exactly the text in the editor.
-    const mirror = await atom.workspace.buildTextEditor();
+    const mirror = await lumine.workspace.buildTextEditor();
     mirror.setText(original);
     for (const change of didChange.params.contentChanges) {
       const { start, end } = change.range;
@@ -191,7 +191,7 @@ describe("ServerSession against a fake server", () => {
     const filePath = path.join(tempDir, "full.js");
     fs.writeFileSync(filePath, "start\n");
     const session = await startSession({ capabilities: { textDocumentSync: 1 } });
-    const editor = await atom.workspace.open(filePath);
+    const editor = await lumine.workspace.open(filePath);
     await session.openEditor(editor);
     editor.setText("replaced\n");
     const received = await receivedMessages(session);
@@ -206,7 +206,7 @@ describe("ServerSession against a fake server", () => {
       { capabilities: { textDocumentSync: 2 } },
       { transformDocumentText: (text) => text.replaceAll("secret", "hidden") },
     );
-    const editor = await atom.workspace.open(filePath);
+    const editor = await lumine.workspace.open(filePath);
     await session.openEditor(editor);
     editor.setText("changed secret\n");
 
@@ -224,7 +224,7 @@ describe("ServerSession against a fake server", () => {
       {},
       { restoreDocumentText: (text) => text.replaceAll("hidden", "secret") },
     );
-    const editor = await atom.workspace.open(filePath);
+    const editor = await lumine.workspace.open(filePath);
     await manager.applyWorkspaceEdit(
       {
         changes: {

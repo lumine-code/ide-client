@@ -2,15 +2,15 @@ describe("ide-client item actions", () => {
   let main, list;
 
   beforeEach(async () => {
-    jasmine.attachToDOM(atom.views.getView(atom.workspace));
+    jasmine.attachToDOM(lumine.views.getView(lumine.workspace));
     // No activation commands here, so a plain activation resolves; it also
     // loads the package keymap the actions list reads.
-    main = (await atom.packages.activatePackage("ide-client")).mainModule;
+    main = (await lumine.packages.activatePackage("ide-client")).mainModule;
     list = main.sessionMenu.serverList;
   });
 
   afterEach(async () => {
-    await atom.packages.deactivatePackage("ide-client");
+    await lumine.packages.deactivatePackage("ide-client");
   });
 
   it("derives its actions from the command registrations and the keymap", () => {
@@ -56,14 +56,14 @@ describe("ide-client item actions", () => {
       kill() {},
     };
     main.manager.sessions.set("pyright:/project", session);
-    spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
     spyOn(main.manager, "restart").and.returnValue(Promise.resolve(session));
 
     await main.sessionMenu.toggle();
     await list.showItemActions();
 
     expect(list.itemActionsList.isVisible()).toBeTruthy();
-    expect(atom.workspace.getModalTrail()).toEqual(["Servers", "Actions"]);
+    expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "Actions"]);
     // The actions list wears the package class, so the package keymap resolves
     // action keystrokes inside it too.
     expect(list.itemActionsList.element.classList.contains("ide-client-session-menu")).toBe(true);

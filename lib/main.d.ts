@@ -1,4 +1,4 @@
-import type { Disposable, TextEditor } from "atom";
+import type { Disposable, TextEditor } from "lumine";
 
 export type ServerTransport = "stdio" | "ipc" | "socket";
 export interface ServerLaunch {

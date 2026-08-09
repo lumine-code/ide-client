@@ -308,11 +308,11 @@ describe("CompletionProvider resolve and commands", () => {
     }));
     const suggestion = await selectFirst(provider, session);
     const editor = { getPath: () => filePath };
-    spyOn(atom.commands, "dispatch");
-    spyOn(atom.views, "getView").and.returnValue("view");
+    spyOn(lumine.commands, "dispatch");
+    spyOn(lumine.views, "getView").and.returnValue("view");
 
     provider.onDidInsertSuggestion({ editor, suggestion });
-    expect(atom.commands.dispatch).toHaveBeenCalledWith("view", "autocomplete:activate");
+    expect(lumine.commands.dispatch).toHaveBeenCalledWith("view", "autocomplete:activate");
     expect(session.requests.length).toBe(0);
   });
 
@@ -326,7 +326,7 @@ describe("CompletionProvider resolve and commands", () => {
 
     provider.onDidInsertSuggestion({ editor: stubEditor("con"), suggestion });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const warning = atom.notifications
+    const warning = lumine.notifications
       .getNotifications()
       .find((n) => n.getMessage().includes("server.doThing"));
     expect(warning).toBeDefined();
@@ -451,7 +451,7 @@ describe("CompletionProvider caching", () => {
     };
     const editor = stubEditor("console");
 
-    atom.config.set("autocomplete.consumeSuffix", true);
+    lumine.config.set("autocomplete.consumeSuffix", true);
     let provider = new CompletionProvider(
       managerWith(sessionWith(() => ({ items: [insertReplace] }))),
     );
@@ -464,7 +464,7 @@ describe("CompletionProvider caching", () => {
     // taking `insert` here strands "nsole" and yields "consolensole".
     expect(result[0].textEdit.range[1]).toEqual([0, 7]);
 
-    atom.config.set("autocomplete.consumeSuffix", false);
+    lumine.config.set("autocomplete.consumeSuffix", false);
     provider = new CompletionProvider(managerWith(sessionWith(() => ({ items: [insertReplace] }))));
     result = await provider.getSuggestions({
       editor,

@@ -14,15 +14,15 @@ const fakeStatusBar = (tiles) => ({
 
 describe("ide-client package", () => {
   beforeEach(async () => {
-    await atom.packages.activatePackage("ide-client");
+    await lumine.packages.activatePackage("ide-client");
   });
 
   afterEach(async () => {
-    await atom.packages.deactivatePackage("ide-client");
+    await lumine.packages.deactivatePackage("ide-client");
   });
 
   it("exposes the versioned language-server service", () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const service = main.provideIdeClient();
     expect(typeof service.registerAdapter).toBe("function");
     expect(typeof service.adaptersForEditor).toBe("function");
@@ -32,14 +32,16 @@ describe("ide-client package", () => {
   });
 
   it("registers its workspace commands", () => {
-    const commands = atom.commands.findCommands({ target: atom.views.getView(atom.workspace) });
+    const commands = lumine.commands.findCommands({
+      target: lumine.views.getView(lumine.workspace),
+    });
     expect(commands.map(({ name }) => name)).toContain("ide-client:toggle-problems");
     expect(commands.map(({ name }) => name)).toContain("ide-client:restart");
     expect(commands.map(({ name }) => name)).toContain("ide-client:servers");
   });
 
   it("satisfies the autocomplete provider contract", () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const provider = main.provideAutocomplete();
     // autocomplete rejects a provider outright when these are misnamed, and
     // the rejection is only visible at runtime.
@@ -51,7 +53,7 @@ describe("ide-client package", () => {
   });
 
   it("consumes a service name that no other provided service nests under", () => {
-    const { consumedServices } = atom.packages.getLoadedPackage("ide-client").metadata;
+    const { consumedServices } = lumine.packages.getLoadedPackage("ide-client").metadata;
     // A service named "x.y" is stored at the key path ["x"]["y"], so it is
     // also handed to consumers of "x". Consuming both names would receive the
     // wrong value depending on registration order.
@@ -64,7 +66,7 @@ describe("ide-client package", () => {
   });
 
   it("takes only the transient half of busy-signal", () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const provider = { add() {}, remove() {}, changeTitle() {}, clear() {}, dispose() {} };
     const registration = main.consumeBusySignal({
       create: () => provider,
@@ -83,7 +85,7 @@ describe("ide-client package", () => {
   });
 
   it("adds its status-bar item to the code-intelligence band", () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const tiles = [];
     const registration = main.consumeStatusBar(fakeStatusBar(tiles));
     expect(tiles.length).toBe(1);
@@ -97,17 +99,17 @@ describe("ide-client package", () => {
   });
 
   it("removes the status-bar item on deactivation", async () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const tiles = [];
     // The disposable consumeStatusBar returns belongs to the status-bar
     // package, so it never fires when this package deactivates.
     main.consumeStatusBar(fakeStatusBar(tiles));
-    await atom.packages.deactivatePackage("ide-client");
+    await lumine.packages.deactivatePackage("ide-client");
     expect(tiles[0].destroyed).toBe(true);
   });
 
   it("publishes LSP diagnostics through linter.registry", () => {
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
     let indieConfig;
     const delegate = {
       batches: [],
@@ -154,10 +156,10 @@ describe("ide-client package", () => {
   it("says why a server that keeps dying has stopped, and offers its log", async () => {
     // The whole point is that the reason is in the log and nothing said to look
     // there, so the notification is only useful if it carries the way in.
-    const main = atom.packages.getActivePackage("ide-client").mainModule;
-    spyOn(atom.notifications, "addError");
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    spyOn(lumine.notifications, "addError");
     spyOn(main, "showLogForAdapter");
-    atom.config.set("ide-client.restartLimit", 1);
+    lumine.config.set("ide-client.restartLimit", 1);
 
     const session = {
       adapter: { id: "ide-example", displayName: "Example Language Server" },
@@ -168,14 +170,14 @@ describe("ide-client package", () => {
     // method: deleting the wiring in activate() has to fail this.
     main.manager.scheduleRestart(session);
 
-    expect(atom.notifications.addError).toHaveBeenCalled();
-    const [title, options] = atom.notifications.addError.calls.mostRecent().args;
+    expect(lumine.notifications.addError).toHaveBeenCalled();
+    const [title, options] = lumine.notifications.addError.calls.mostRecent().args;
     expect(title).toContain("Example Language Server");
     expect(options.description).toContain("restarted 1 time");
     expect(options.buttons.map((button) => button.text)).toEqual(["Open Log"]);
 
     options.buttons[0].onDidClick();
     expect(main.showLogForAdapter).toHaveBeenCalledWith("ide-example");
-    atom.config.unset("ide-client.restartLimit");
+    lumine.config.unset("ide-client.restartLimit");
   });
 });

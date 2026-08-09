@@ -100,7 +100,7 @@ describe("LanguageServerManager session lifetime", () => {
   });
 
   it("keeps a session rooted at a project path warm", () => {
-    const [root] = atom.project.getPaths();
+    const [root] = lumine.project.getPaths();
     expect(root).toBeDefined();
     const session = sessionAt(root);
     manager.didCloseDocument(session);
@@ -120,7 +120,7 @@ describe("LanguageServerManager session lifetime", () => {
   });
 
   it("gives an editor a new server when its root leaves the project", async () => {
-    const editor = await atom.workspace.open(path.join(atom.project.getPaths()[0], "a.test"));
+    const editor = await lumine.workspace.open(path.join(lumine.project.getPaths()[0], "a.test"));
     spyOn(manager, "reattachEditor");
     spyOn(manager, "attachEditor");
 
@@ -132,8 +132,8 @@ describe("LanguageServerManager session lifetime", () => {
   });
 
   it("moves an editor onto the session of the root it just gained", async () => {
-    const filePath = path.join(atom.project.getPaths()[0], "b.test");
-    const editor = await atom.workspace.open(filePath);
+    const filePath = path.join(lumine.project.getPaths()[0], "b.test");
+    const editor = await lumine.workspace.open(filePath);
     // Attached to a session keyed to its own directory, as it would be when
     // opened before any project folder existed.
     const loose = sessionAt(path.dirname(filePath));
@@ -146,15 +146,15 @@ describe("LanguageServerManager session lifetime", () => {
   });
 
   it("leaves an editor alone when its root did not change", async () => {
-    const filePath = path.join(atom.project.getPaths()[0], "c.test");
-    const editor = await atom.workspace.open(filePath);
+    const filePath = path.join(lumine.project.getPaths()[0], "c.test");
+    const editor = await lumine.workspace.open(filePath);
     manager.registerAdapter({
       id: "test",
       displayName: "Test",
       grammarScopes: [editor.getGrammar().scopeName],
       resolveServer: async () => null,
     });
-    const root = atom.project.getPaths()[0];
+    const root = lumine.project.getPaths()[0];
     const session = sessionAt(root);
     session.documents.set(C.uriKey(require("url").pathToFileURL(filePath).href), {});
     spyOn(manager, "reattachEditor");
@@ -183,7 +183,7 @@ describe("LanguageServerManager session lifetime", () => {
       sessionScope: "workspace",
       resolveServer: async () => null,
     };
-    const [root] = atom.project.getPaths();
+    const [root] = lumine.project.getPaths();
     const other = path.join(path.sep, "tmp", "other");
     // The identity of a window-wide server must not depend on which root
     // happens to sort first, or removing a folder silently starts a second one.
@@ -196,7 +196,7 @@ describe("LanguageServerManager session lifetime", () => {
   it("keeps a workspace-scoped session warm although its own root left", () => {
     const session = sessionAt(path.join(path.sep, "tmp", "gone"));
     session.adapter.sessionScope = "workspace";
-    expect(atom.project.getPaths().length).toBeGreaterThan(0);
+    expect(lumine.project.getPaths().length).toBeGreaterThan(0);
     manager.didCloseDocument(session);
     advanceClock(1000);
     // It still answers for the roots that remain.
@@ -271,8 +271,8 @@ describe("LanguageServerManager multi-root servers", () => {
   });
 
   it("offers the folder to a running server before resolving a new one", async () => {
-    const root = atom.project.getPaths()[0];
-    const editor = await atom.workspace.open(path.join(root, "x.test"));
+    const root = lumine.project.getPaths()[0];
+    const editor = await lumine.workspace.open(path.join(root, "x.test"));
     adapter = {
       id: "adopt",
       displayName: "Adopt",
@@ -295,7 +295,7 @@ describe("LanguageServerManager multi-root servers", () => {
     const session = sessionAt(rootA, MULTI_ROOT);
     await manager.adoptFolder(adapter, rootB, manager.keyFor(adapter, rootB));
     notifications.length = 0;
-    spyOn(atom.project, "getPaths").and.returnValue([rootA]);
+    spyOn(lumine.project, "getPaths").and.returnValue([rootA]);
 
     manager.reconcileProjects();
     expect(session.stop).not.toHaveBeenCalled();
@@ -309,7 +309,7 @@ describe("LanguageServerManager multi-root servers", () => {
   it("stops a shared server once its last folder leaves the project", async () => {
     const session = sessionAt(rootA, MULTI_ROOT);
     await manager.adoptFolder(adapter, rootB, manager.keyFor(adapter, rootB));
-    spyOn(atom.project, "getPaths").and.returnValue([]);
+    spyOn(lumine.project, "getPaths").and.returnValue([]);
 
     manager.reconcileProjects();
     expect(session.stop).toHaveBeenCalled();
@@ -456,7 +456,7 @@ describe("LanguageServerManager capabilities", () => {
     manager.sessions.set("fake:root", session);
     manager.knownRoots = [];
     manager.projectPathsChanged();
-    const roots = atom.project.getPaths();
+    const roots = lumine.project.getPaths();
     if (roots.length) {
       expect(notifications[0].method).toBe("workspace/didChangeWorkspaceFolders");
       expect(notifications[0].params.event.added.length).toBe(roots.length);
@@ -552,7 +552,7 @@ describe("LanguageServerManager restart", () => {
   it("says so once when a server has exited more often than it may be restarted", () => {
     // Giving up was silent: the retries stopped, the status item read "failed",
     // and the reason sat unread in the log.
-    atom.config.set("ide-client.restartLimit", 2);
+    lumine.config.set("ide-client.restartLimit", 2);
     const session = {
       adapter: { id: "test", displayName: "Test Language Server" },
       restartCount: 2,
@@ -567,11 +567,11 @@ describe("LanguageServerManager restart", () => {
     manager.scheduleRestart(session);
 
     expect(exhausted).toEqual([session]);
-    atom.config.unset("ide-client.restartLimit");
+    lumine.config.unset("ide-client.restartLimit");
   });
 
   it("keeps quiet while it still has restarts left", () => {
-    atom.config.set("ide-client.restartLimit", 3);
+    lumine.config.set("ide-client.restartLimit", 3);
     const session = {
       adapter: { id: "test", displayName: "Test Language Server" },
       restartCount: 0,
@@ -582,7 +582,7 @@ describe("LanguageServerManager restart", () => {
     manager.scheduleRestart(session);
     expect(exhausted).toEqual([]);
     expect(session.restartCount).toBe(1);
-    atom.config.unset("ide-client.restartLimit");
+    lumine.config.unset("ide-client.restartLimit");
   });
 
   it("declines to restart a server the adapter says is not installed", async () => {
@@ -709,7 +709,7 @@ describe("LanguageServerManager teardown", () => {
     // it reaches; a server that outlives its stdin is orphaned without it.
     const session = add("a:/project", stubSession("a"));
 
-    atom.emitter.emit("will-destroy");
+    lumine.emitter.emit("will-destroy");
 
     expect(session.kill).toHaveBeenCalled();
     expect(session.stop).not.toHaveBeenCalled();
@@ -723,7 +723,7 @@ describe("LanguageServerManager teardown", () => {
     });
     const healthy = add("b:/project", stubSession("b"));
 
-    atom.emitter.emit("will-destroy");
+    lumine.emitter.emit("will-destroy");
 
     expect(failing.kill).toHaveBeenCalled();
     expect(healthy.kill).toHaveBeenCalled();
@@ -738,7 +738,7 @@ describe("LanguageServerManager teardown", () => {
     const session = add("a:/project", stubSession("a"));
 
     await manager.deactivate();
-    atom.emitter.emit("will-destroy");
+    lumine.emitter.emit("will-destroy");
 
     expect(session.stop).toHaveBeenCalled();
     expect(session.kill).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 const path = require("path");
 const os = require("os");
-const { Emitter } = require("atom");
+const { Emitter } = require("lumine");
 const SemanticTokens = require("../lib/semantic-tokens");
 const { createScopeMap } = require("../lib/semantic-scope-map");
 
@@ -74,11 +74,11 @@ describe("SemanticTokens", () => {
   };
 
   beforeEach(async () => {
-    const workspaceElement = atom.workspace.getElement();
+    const workspaceElement = lumine.workspace.getElement();
     workspaceElement.style.width = "800px";
     workspaceElement.style.height = "400px";
     jasmine.attachToDOM(workspaceElement);
-    editor = await atom.workspace.open(path.join(os.tmpdir(), "semantic-tokens-example.js"));
+    editor = await lumine.workspace.open(path.join(os.tmpdir(), "semantic-tokens-example.js"));
     editor.setText("const one = 1;\nlet two = 2;\n");
     advanceClock(editor.getBuffer().stoppedChangingDelay + 1);
     tracker = makeTracker();
@@ -96,7 +96,7 @@ describe("SemanticTokens", () => {
   });
 
   it("decodes the packed array into text decorations with mapped syntax classes", async () => {
-    atom.config.set("ide-client.semanticTokens.enabled", true);
+    lumine.config.set("ide-client.semanticTokens.enabled", true);
     // "const"(keyword), "one"(variable), then "two"(variable, deprecated).
     const data = [0, 0, 5, 0, 0, 0, 6, 3, 1, 0, 1, 4, 3, 1, 1];
     const session = makeSession(
@@ -114,7 +114,7 @@ describe("SemanticTokens", () => {
   });
 
   it("applies semantic token deltas to the stored data", async () => {
-    atom.config.set("ide-client.semanticTokens.enabled", true);
+    lumine.config.set("ide-client.semanticTokens.enabled", true);
     const data = [0, 0, 5, 0, 0, 0, 6, 3, 1, 0];
     const session = makeSession(
       (method) => {
@@ -150,7 +150,7 @@ describe("SemanticTokens", () => {
   });
 
   it("falls back to viewport range mode past the token budget", async () => {
-    atom.config.set("ide-client.semanticTokens.enabled", true);
+    lumine.config.set("ide-client.semanticTokens.enabled", true);
     const bigData = [];
     for (let i = 0; i < 20001; i++) bigData.push(0, 1, 1, 0, 0);
     const session = makeSession(
@@ -188,7 +188,7 @@ describe("SemanticTokens", () => {
     // one once it is running. Nothing re-read the capabilities after startup,
     // so the module had already concluded the server could not serve this and
     // rendered nothing, for the life of the session.
-    atom.config.set("ide-client.semanticTokens.enabled", true);
+    lumine.config.set("ide-client.semanticTokens.enabled", true);
     const registered = { legend, full: true };
     const session = makeSession(() => ({ data: [0, 0, 5, 0, 0] }), {});
     // Absent at startup, reachable only through the registration afterwards.
@@ -213,7 +213,7 @@ describe("SemanticTokens", () => {
   });
 
   it("skips the feature when neither budget nor capability fits", async () => {
-    atom.config.set("ide-client.semanticTokens.enabled", true);
+    lumine.config.set("ide-client.semanticTokens.enabled", true);
     const bigData = [];
     for (let i = 0; i < 20001; i++) bigData.push(0, 1, 1, 0, 0);
     const session = makeSession(

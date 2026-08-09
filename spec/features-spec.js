@@ -49,7 +49,7 @@ const managerWith = (...sessions) => ({
 describe("feature switches", () => {
   afterEach(() => {
     for (const id of ["ide-a", "ide-b"])
-      for (const feature of FEATURES) atom.config.unset(`${id}.features.${feature}`);
+      for (const feature of FEATURES) lumine.config.unset(`${id}.features.${feature}`);
   });
 
   describe("featureEnabled", () => {
@@ -57,24 +57,24 @@ describe("feature switches", () => {
       expect(featureEnabled(adapterFor("ide-a"), "hover", stubEditor())).toBe(true);
     });
     it("reads the adapter's own config namespace", () => {
-      atom.config.set("ide-a.features.hover", false);
+      lumine.config.set("ide-a.features.hover", false);
       expect(featureEnabled(adapterFor("ide-a"), "hover", stubEditor())).toBe(false);
       expect(featureEnabled(adapterFor("ide-b"), "hover", stubEditor())).toBe(true);
     });
     it("honours a scoped override", () => {
-      atom.config.set("ide-a.features.inlayHints", true);
-      atom.config.set("ide-a.features.inlayHints", false, { scopeSelector: ".source.js" });
+      lumine.config.set("ide-a.features.inlayHints", true);
+      lumine.config.set("ide-a.features.inlayHints", false, { scopeSelector: ".source.js" });
       expect(featureEnabled(adapterFor("ide-a"), "inlayHints", stubEditor("source.js"))).toBe(
         false,
       );
       expect(featureEnabled(adapterFor("ide-a"), "inlayHints", stubEditor("source.py"))).toBe(true);
-      atom.config.unset("ide-a.features.inlayHints", { scopeSelector: ".source.js" });
+      lumine.config.unset("ide-a.features.inlayHints", { scopeSelector: ".source.js" });
     });
     it("falls back to what the adapter declared", () => {
       const adapter = adapterFor("ide-a", { features: { hover: false } });
       expect(featureEnabled(adapter, "hover", stubEditor())).toBe(false);
       // The user's setting is the one they can change, so it wins.
-      atom.config.set("ide-a.features.hover", true);
+      lumine.config.set("ide-a.features.hover", true);
       expect(featureEnabled(adapter, "hover", stubEditor())).toBe(true);
     });
     it("gives a custom server no config namespace", () => {
@@ -97,13 +97,13 @@ describe("feature switches", () => {
     it("refuses a disabled feature the server does implement", () => {
       const session = sessionFor(adapterFor("ide-a"), { hoverProvider: true });
       expect(session.supports("textDocument/hover", stubEditor())).toBe(true);
-      atom.config.set("ide-a.features.hover", false);
+      lumine.config.set("ide-a.features.hover", false);
       expect(session.supports("textDocument/hover", stubEditor())).toBe(false);
     });
     it("keeps outline and go-to-symbol apart on one request", () => {
       const session = sessionFor(adapterFor("ide-a"), { documentSymbolProvider: true });
       const editor = stubEditor();
-      atom.config.set("ide-a.features.outline", false);
+      lumine.config.set("ide-a.features.outline", false);
       expect(session.supports("textDocument/documentSymbol", editor, "outline")).toBe(false);
       expect(session.supports("textDocument/documentSymbol", editor, "symbols")).toBe(true);
     });
@@ -134,7 +134,7 @@ describe("feature switches", () => {
       const provider = new CodeFormatProvider(managerWith(first, second));
       expect((await provider.formatFile(stubEditor()))[0].newText).toBe("a");
 
-      atom.config.set("ide-a.features.format", false);
+      lumine.config.set("ide-a.features.format", false);
       expect((await provider.formatFile(stubEditor()))[0].newText).toBe("b");
       // Not merely filtered afterwards — the disabled server is never asked.
       expect(first.request.calls.count()).toBe(1);
@@ -159,7 +159,7 @@ describe("feature switches", () => {
       const both = await provider.hover(stubEditor(), { row: 0, column: 0 });
       expect(both.contents.value).toBe("the type\n\n---\n\nthe lint rule");
 
-      atom.config.set("ide-b.features.hover", false);
+      lumine.config.set("ide-b.features.hover", false);
       const one = await provider.hover(stubEditor(), { row: 0, column: 0 });
       expect(one.contents.value).toBe("the type");
       expect(second.request.calls.count()).toBe(1);
@@ -176,7 +176,7 @@ describe("feature switches", () => {
       ];
       const session = sessionFor(adapterFor("ide-a"), { documentSymbolProvider: true }, symbols);
       const manager = managerWith(session);
-      atom.config.set("ide-a.features.outline", false);
+      lumine.config.set("ide-a.features.outline", false);
 
       expect(await new OutlineProvider(manager).getOutline(stubEditor())).toBeNull();
       const found = await new SymbolProvider(manager).getSymbols({ editor: stubEditor() });
@@ -216,8 +216,8 @@ describe("diagnostics switch", () => {
     });
 
   beforeEach(async () => {
-    await atom.packages.activatePackage("ide-client");
-    main = atom.packages.getActivePackage("ide-client").mainModule;
+    await lumine.packages.activatePackage("ide-client");
+    main = lumine.packages.getActivePackage("ide-client").mainModule;
     manager = main.manager;
     adapter = adapterFor("ide-a");
     manager.registerAdapter(adapter);
@@ -233,8 +233,8 @@ describe("diagnostics switch", () => {
 
   afterEach(async () => {
     registration.dispose();
-    atom.config.unset("ide-a.features.diagnostics");
-    await atom.packages.deactivatePackage("ide-client");
+    lumine.config.unset("ide-a.features.diagnostics");
+    await lumine.packages.deactivatePackage("ide-client");
   });
 
   it("publishes what a server reports", () => {
@@ -244,20 +244,20 @@ describe("diagnostics switch", () => {
 
   it("clears and restores without restarting the server", () => {
     push("broken");
-    atom.config.set("ide-a.features.diagnostics", false);
+    lumine.config.set("ide-a.features.diagnostics", false);
     expect(messages.get(FILE)).toEqual([]);
 
     // Still stored, so switching back on does not need the server to say it
     // again — nothing in LSP can ask it to.
-    atom.config.set("ide-a.features.diagnostics", true);
+    lumine.config.set("ide-a.features.diagnostics", true);
     expect(messages.get(FILE).map(({ excerpt }) => excerpt)).toEqual(["broken"]);
   });
 
   it("ignores what arrives while it is off", () => {
-    atom.config.set("ide-a.features.diagnostics", false);
+    lumine.config.set("ide-a.features.diagnostics", false);
     push("broken");
     expect(messages.get(FILE)).toBeUndefined();
-    atom.config.set("ide-a.features.diagnostics", true);
+    lumine.config.set("ide-a.features.diagnostics", true);
     expect(messages.get(FILE).map(({ excerpt }) => excerpt)).toEqual(["broken"]);
   });
 });

@@ -1,6 +1,6 @@
 const path = require("path");
 const os = require("os");
-const { Emitter } = require("atom");
+const { Emitter } = require("lumine");
 const CodeLens = require("../lib/code-lens");
 
 const flush = async () => {
@@ -72,12 +72,12 @@ describe("CodeLens", () => {
   };
 
   beforeEach(async () => {
-    atom.config.set("ide-client.codeLens.enabled", true);
-    const workspaceElement = atom.workspace.getElement();
+    lumine.config.set("ide-client.codeLens.enabled", true);
+    const workspaceElement = lumine.workspace.getElement();
     workspaceElement.style.width = "800px";
     workspaceElement.style.height = "400px";
     jasmine.attachToDOM(workspaceElement);
-    editor = await atom.workspace.open(path.join(os.tmpdir(), "code-lens-example.js"));
+    editor = await lumine.workspace.open(path.join(os.tmpdir(), "code-lens-example.js"));
     editor.setText("function one() {}\nfunction two() {}\nfunction three() {}\n");
     tracker = makeTracker();
   });
@@ -166,7 +166,7 @@ describe("CodeLens", () => {
   });
 
   it("renders nothing when the scoped config disables it", async () => {
-    atom.config.set("ide-client.codeLens.enabled", false);
+    lumine.config.set("ide-client.codeLens.enabled", false);
     const session = makeSession(() => [lensAt(0, "hidden")]);
     await attach(session);
     expect(session.requests.length).toBe(0);

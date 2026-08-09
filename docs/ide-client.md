@@ -94,7 +94,7 @@ The service you receive:
 ## Minimal example
 
 ```js
-const { Disposable } = require("atom");
+const { Disposable } = require("lumine");
 
 module.exports = {
   consumeIdeClient(client) {
@@ -107,7 +107,7 @@ module.exports = {
         if (!command) return null;
         return { command, args: ["--stdio"], cwd: rootPath };
       },
-      getSettings: () => ({ mylang: atom.config.get("my-package.serverSettings") }),
+      getSettings: () => ({ mylang: lumine.config.get("my-package.serverSettings") }),
       settingsKeyPaths: ["my-package.serverSettings"],
     });
   },

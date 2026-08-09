@@ -29,7 +29,7 @@ To install `ide-client` search for _ide-client_ in the Install pane of the Lumin
 
 ## Commands
 
-Commands available in `atom-workspace`:
+Commands available in `lumine-workspace`:
 
 - `ide-client:servers`: list the running language servers and act on one of them,
 - `ide-client:restart`: restart the language servers for the active editor,

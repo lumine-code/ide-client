@@ -27,7 +27,7 @@ describe("ide-client status-bar item", () => {
   });
 
   // The batched write is flushed by hand so the assertions stay synchronous.
-  const flush = () => atom.views.performDocumentUpdate();
+  const flush = () => lumine.views.performDocumentUpdate();
 
   const addSession = (session) => {
     main.manager.sessions.set(`${session.adapter.id}:${session.rootPath}`, session);
@@ -36,8 +36,8 @@ describe("ide-client status-bar item", () => {
   };
 
   beforeEach(async () => {
-    await atom.packages.activatePackage("ide-client");
-    main = atom.packages.getActivePackage("ide-client").mainModule;
+    await lumine.packages.activatePackage("ide-client");
+    main = lumine.packages.getActivePackage("ide-client").mainModule;
     tiles = [];
     main.consumeStatusBar(fakeStatusBar());
     view = main.serverStatus;
@@ -45,7 +45,7 @@ describe("ide-client status-bar item", () => {
   });
 
   afterEach(async () => {
-    await atom.packages.deactivatePackage("ide-client");
+    await lumine.packages.deactivatePackage("ide-client");
   });
 
   it("stays in place while no server is running", () => {
@@ -130,11 +130,11 @@ describe("ide-client status-bar item", () => {
 
   it("stays hidden while the setting is off", () => {
     addSession(stubSession("running"));
-    atom.config.set("ide-client.statusBar.enabled", false);
+    lumine.config.set("ide-client.statusBar.enabled", false);
     flush();
     expect(view.element.style.display).toBe("none");
 
-    atom.config.set("ide-client.statusBar.enabled", true);
+    lumine.config.set("ide-client.statusBar.enabled", true);
     flush();
     expect(view.element.style.display).toBe("");
   });

@@ -18,13 +18,13 @@ describe("ide-client session menu", () => {
   const renderDetail = (item) => menu.detailsList.resolveElement(item, {});
 
   beforeEach(async () => {
-    await atom.packages.activatePackage("ide-client");
-    main = atom.packages.getActivePackage("ide-client").mainModule;
+    await lumine.packages.activatePackage("ide-client");
+    main = lumine.packages.getActivePackage("ide-client").mainModule;
     menu = main.sessionMenu;
   });
 
   afterEach(async () => {
-    await atom.packages.deactivatePackage("ide-client");
+    await lumine.packages.deactivatePackage("ide-client");
   });
 
   it("puts the state in the trailing block of the primary line", () => {
@@ -97,7 +97,7 @@ describe("ide-client session menu", () => {
     const shared = stubSession("running", "pyright", "/project", ["/project", "/work/tools"]);
     main.manager.sessions.set("pyright:/project", shared);
     main.manager.sessions.set("pyright:/work/tools", shared);
-    spyOn(atom.project, "getPaths").and.returnValue(["/project", "/work/tools"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/project", "/work/tools"]);
 
     const [item, ...rest] = menu.serverItems();
     // One entry for one server, however many folders it took on.
@@ -109,7 +109,7 @@ describe("ide-client session menu", () => {
     const session = stubSession("running", "wide", "/project");
     session.adapter.sessionScope = "workspace";
     main.manager.sessions.set("wide:", session);
-    spyOn(atom.project, "getPaths").and.returnValue(["/one", "/two"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/one", "/two"]);
 
     // Its own rootPath is just whichever folder came first.
     expect(menu.serverItems()[0].detail).toBe("Workspace · /one, /two");
@@ -117,7 +117,7 @@ describe("ide-client session menu", () => {
 
   it("calls a single project folder a root", () => {
     main.manager.sessions.set("stub:/project", stubSession("running"));
-    spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
     expect(menu.serverItems()[0].detail).toBe("Root · /project");
   });
 
@@ -127,7 +127,7 @@ describe("ide-client session menu", () => {
     const session = stubSession("running", "loose", "/tmp/scratch");
     session.documents = new Map([["uri", { editor: { getPath: () => "/tmp/scratch/notes.py" } }]]);
     main.manager.sessions.set("loose:/tmp/scratch", session);
-    spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
 
     expect(menu.serverItems()[0].detail).toBe("File · /tmp/scratch/notes.py");
   });
@@ -135,7 +135,7 @@ describe("ide-client session menu", () => {
   it("falls back to the directory when the loose file has no path yet", () => {
     const session = stubSession("running", "loose", "/tmp/scratch");
     main.manager.sessions.set("loose:/tmp/scratch", session);
-    spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+    spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
 
     expect(menu.serverItems()[0].detail).toBe("File · /tmp/scratch");
   });
@@ -146,7 +146,7 @@ describe("ide-client session menu", () => {
     main.manager.sessions.set("zeta:/project", other);
     main.manager.sessions.set("alpha:/project", serving);
     spyOn(main.manager, "sessionsForEditor").and.returnValue([other]);
-    spyOn(atom.workspace, "getActiveTextEditor").and.returnValue({});
+    spyOn(lumine.workspace, "getActiveTextEditor").and.returnValue({});
 
     expect(menu.serverItems().map((item) => item.label)).toEqual(["zeta Server", "alpha Server"]);
   });
@@ -176,7 +176,7 @@ describe("ide-client session menu", () => {
           ["file:///b.py", { diagnostics: [] }],
         ]),
       );
-      spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+      spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
     });
 
     it("routes a confirmed server row into showDetails", async () => {
@@ -194,7 +194,7 @@ describe("ide-client session menu", () => {
 
       expect(menu.serverList.isVisible()).toBeFalsy();
       expect(menu.detailsList.isVisible()).toBeTruthy();
-      expect(atom.workspace.getModalTrail()).toEqual(["Servers", "pyright Server"]);
+      expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "pyright Server"]);
       expect(menu.detailsList.props.items.map((item) => item.label)).toEqual([
         "State",
         "Scope",
@@ -245,7 +245,7 @@ describe("ide-client session menu", () => {
       // what the handler returns, so the render would still be pending here.
       await menu.detailsList.props.didConfirmSelection(menu.detailsList.getSelectedItem());
 
-      expect(atom.clipboard.read()).toBe("basedpyright-langserver --stdio");
+      expect(lumine.clipboard.read()).toBe("basedpyright-langserver --stdio");
       expect(menu.detailsList.isVisible()).toBeTruthy();
       expect(menu.detailsList.refs.infoMessage.textContent).toBe("Copied Command");
     });
@@ -258,13 +258,13 @@ describe("ide-client session menu", () => {
       // list the back navigation re-shows.
       main.manager.sessions.set("late:/project", stubSession("starting", "late"));
 
-      expect(atom.workspace.popModal()).toBe(true);
+      expect(lumine.workspace.popModal()).toBe(true);
       expect(menu.serverList.isVisible()).toBeTruthy();
       expect(menu.serverList.props.items.map((item) => item.label)).toEqual([
         "late Server",
         "pyright Server",
       ]);
-      expect(atom.workspace.getModalTrail()).toEqual(["Servers"]);
+      expect(lumine.workspace.getModalTrail()).toEqual(["Servers"]);
     });
   });
 
@@ -277,7 +277,7 @@ describe("ide-client session menu", () => {
       second = stubSession("running", "zeta");
       main.manager.sessions.set("alpha:/project", first);
       main.manager.sessions.set("zeta:/project", second);
-      spyOn(atom.project, "getPaths").and.returnValue(["/project"]);
+      spyOn(lumine.project, "getPaths").and.returnValue(["/project"]);
       await menu.toggle();
     });
 
@@ -285,26 +285,26 @@ describe("ide-client session menu", () => {
       spyOn(main.manager, "restart").and.returnValue(Promise.resolve(second));
       await menu.serverList.selectIndex(1);
 
-      atom.commands.dispatch(menu.serverList.element, "ide-client:restart-server");
+      lumine.commands.dispatch(menu.serverList.element, "ide-client:restart-server");
       expect(main.manager.restart).toHaveBeenCalledWith(second);
 
       spyOn(main.manager, "disconnect").and.returnValue(Promise.resolve());
-      atom.commands.dispatch(menu.serverList.element, "ide-client:stop-server");
+      lumine.commands.dispatch(menu.serverList.element, "ide-client:stop-server");
       expect(main.manager.disconnect).toHaveBeenCalledWith(second);
 
       spyOn(main, "showLogForAdapter").and.returnValue(Promise.resolve());
-      atom.commands.dispatch(menu.serverList.element, "ide-client:show-server-log");
+      lumine.commands.dispatch(menu.serverList.element, "ide-client:show-server-log");
       expect(main.showLogForAdapter).toHaveBeenCalledWith("zeta");
     });
 
     it("keeps the list open and reports a failure where the row still is", async () => {
       spyOn(main.manager, "restart").and.returnValue(Promise.reject(new Error("no such command")));
-      spyOn(atom.notifications, "addError");
+      spyOn(lumine.notifications, "addError");
 
       await menu.run(main.manager.restart(first));
 
       expect(menu.serverList.isVisible()).toBeTruthy();
-      expect(atom.notifications.addError.calls.mostRecent().args[0]).toBe(
+      expect(lumine.notifications.addError.calls.mostRecent().args[0]).toBe(
         "Language server action failed",
       );
     });

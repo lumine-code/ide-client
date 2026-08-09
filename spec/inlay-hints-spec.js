@@ -1,6 +1,6 @@
 const path = require("path");
 const os = require("os");
-const { Emitter } = require("atom");
+const { Emitter } = require("lumine");
 const InlayHints = require("../lib/inlay-hints");
 const ViewportTracker = require("../lib/viewport-tracker");
 
@@ -69,13 +69,13 @@ describe("InlayHints", () => {
   };
 
   beforeEach(async () => {
-    atom.config.set("ide-client.inlayHints.enabled", true);
-    atom.config.set("ide-client.inlayHints.maxLabelLength", 48);
-    const workspaceElement = atom.workspace.getElement();
+    lumine.config.set("ide-client.inlayHints.enabled", true);
+    lumine.config.set("ide-client.inlayHints.maxLabelLength", 48);
+    const workspaceElement = lumine.workspace.getElement();
     workspaceElement.style.width = "800px";
     workspaceElement.style.height = "400px";
     jasmine.attachToDOM(workspaceElement);
-    editor = await atom.workspace.open(path.join(os.tmpdir(), "inlay-hints-example.js"));
+    editor = await lumine.workspace.open(path.join(os.tmpdir(), "inlay-hints-example.js"));
     editor.setText("const sum = add(first, second);\n\nlet x = 5;\n");
     advanceClock(editor.getBuffer().stoppedChangingDelay + 1);
     tracker = makeTracker();
@@ -107,7 +107,7 @@ describe("InlayHints", () => {
   });
 
   it("truncates labels beyond maxLabelLength and joins label parts", async () => {
-    atom.config.set("ide-client.inlayHints.maxLabelLength", 5);
+    lumine.config.set("ide-client.inlayHints.maxLabelLength", 5);
     await attach(() => [
       { position: { line: 0, character: 6 }, label: [{ value: "abc" }, { value: "defgh" }] },
     ]);
@@ -160,7 +160,7 @@ describe("InlayHints", () => {
   it("leaves a press on a hint label to the renderer, which resolves it to the anchor", async () => {
     // The labels are pseudo-element content and occupy no space until this
     // package's own stylesheet is loaded.
-    const styles = atom.themes.requireStylesheet(
+    const styles = lumine.themes.requireStylesheet(
       path.join(__dirname, "..", "styles", "ide-client.css"),
     );
     try {
@@ -220,7 +220,7 @@ describe("InlayHints", () => {
 
   it("honors a per-language scoped disable", async () => {
     const rootScope = editor.getRootScopeDescriptor().getScopesArray()[0];
-    atom.config.set("ide-client.inlayHints.enabled", false, { scopeSelector: `.${rootScope}` });
+    lumine.config.set("ide-client.inlayHints.enabled", false, { scopeSelector: `.${rootScope}` });
     const session = await attach(() => [{ position: { line: 0, character: 11 }, label: ": n" }]);
     expect(session.requests.length).toBe(0);
     expect(inlayHints.states.get(editor).hints.size).toBe(0);
@@ -231,11 +231,11 @@ describe("ViewportTracker", () => {
   let editor, viewportTracker;
 
   beforeEach(async () => {
-    const workspaceElement = atom.workspace.getElement();
+    const workspaceElement = lumine.workspace.getElement();
     workspaceElement.style.width = "800px";
     workspaceElement.style.height = "400px";
     jasmine.attachToDOM(workspaceElement);
-    editor = await atom.workspace.open(path.join(os.tmpdir(), "viewport-tracker-example.js"));
+    editor = await lumine.workspace.open(path.join(os.tmpdir(), "viewport-tracker-example.js"));
     editor.setText("x\n".repeat(300));
   });
 
@@ -261,7 +261,7 @@ describe("ViewportTracker", () => {
     viewportTracker = new ViewportTracker();
     // An editor opened in a background tab reports no visible rows, and
     // converting that to a screen position throws on an invalid Point.
-    const hidden = await atom.workspace.buildTextEditor();
+    const hidden = await lumine.workspace.buildTextEditor();
     hidden.setText("x\n".repeat(300));
     expect(hidden.getFirstVisibleScreenRow()).not.toBeGreaterThan(0);
     const [start, end] = viewportTracker.rangeForEditor(hidden);
