@@ -391,6 +391,25 @@ describe("ServerSession against a fake server", () => {
     expect(child.signalCode).toBeNull();
   });
 
+  // `shutdown` is a request like any other, and a server that accepts it and
+  // never answers would hold the promise open with nothing to time it out.
+  // `stop()` runs on the unload path, where the main process is waiting on the
+  // reply before it may reload or close the window — so this used to be a window
+  // that never came back.
+  it("stops a server that never answers shutdown", async () => {
+    const session = await startSession();
+    const child = session.process;
+    const request = session.connection.request.bind(session.connection);
+    spyOn(session.connection, "request").and.callFake((method, ...args) =>
+      method === "shutdown" ? new Promise(() => {}) : request(method, ...args),
+    );
+
+    await session.stop();
+
+    expect(session.state).toBe("stopped");
+    expect(child.exitCode != null || child.signalCode != null).toBe(true);
+  });
+
   // The report this guards: `exit` is written to a server that is already gone,
   // the write fails a tick later, and an unheard stream error takes down the
   // renderer with "Uncaught Error: write EPIPE".
