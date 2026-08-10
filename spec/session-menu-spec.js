@@ -247,7 +247,12 @@ describe("ide-client session menu", () => {
 
       expect(lumine.clipboard.read()).toBe("basedpyright-langserver --stdio");
       expect(menu.detailsList.isVisible()).toBeTruthy();
-      expect(menu.detailsList.refs.infoMessage.textContent).toBe("Copied Command");
+      expect(menu.detailsList.refs.statusMessage.textContent).toBe("Copied Command");
+
+      // It takes itself down, and the copy hint is still underneath.
+      advanceClock(2000);
+      await conditionPromise(() => Boolean(menu.detailsList.refs.infoMessage));
+      expect(menu.detailsList.refs.infoMessage.textContent).toBe("Confirm a row to copy its value");
     });
 
     it("returns to a freshly built server list on back navigation", async () => {
