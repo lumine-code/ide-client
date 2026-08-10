@@ -705,8 +705,10 @@ describe("LanguageServerManager teardown", () => {
   });
 
   it("kills the servers when the window goes away without deactivating", () => {
-    // A reload never calls `deactivate`, so `will-destroy` is the only teardown
-    // it reaches; a server that outlives its stdin is orphaned without it.
+    // An orderly unload deactivates first, which stops the sessions properly and
+    // leaves this nothing to do. What it covers is the teardown that never got
+    // there — a crashed renderer being reloaded — where a server that outlives
+    // its stdin would be orphaned.
     const session = add("a:/project", stubSession("a"));
 
     lumine.emitter.emit("will-destroy");
