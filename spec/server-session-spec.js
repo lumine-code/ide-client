@@ -70,6 +70,9 @@ describe("ServerSession against a fake server", () => {
       relatedDocumentSupport: true,
     });
     expect(initialize.params.capabilities.workspace.diagnostics.refreshSupport).toBe(true);
+    expect(
+      initialize.params.capabilities.workspace.didChangeConfiguration.dynamicRegistration,
+    ).toBe(true);
   });
 
   it("merges registered capability fragments into the handshake", async () => {
