@@ -69,6 +69,16 @@ describe("ServerSession against a fake server", () => {
       dynamicRegistration: false,
       relatedDocumentSupport: true,
     });
+    // Neither hierarchy has an implementation in the hub: both are advertised
+    // on hierarchy-view's behalf, because an external package cannot
+    // contribute a fragment of its own. A server that never saw these declares
+    // no provider, so assert them over the real handshake too.
+    expect(initialize.params.capabilities.textDocument.callHierarchy).toEqual({
+      dynamicRegistration: true,
+    });
+    expect(initialize.params.capabilities.textDocument.typeHierarchy).toEqual({
+      dynamicRegistration: true,
+    });
     expect(initialize.params.capabilities.workspace.diagnostics.refreshSupport).toBe(true);
     expect(
       initialize.params.capabilities.workspace.didChangeConfiguration.dynamicRegistration,
@@ -433,6 +443,21 @@ describe("ServerSession against a fake server", () => {
     expect(session.supports("textDocument/formatting", jsEditor)).toBe(false);
     expect(session.supports("textDocument/hover", jsEditor)).toBe(true);
     expect(session.supports("textDocument/rename", jsEditor)).toBe(false);
+  });
+
+  it("tells the two hierarchies apart in supports()", async () => {
+    // Both are prepared by their own request and answered by their own
+    // provider field, so a server that offers one must not appear to offer
+    // the other. Only the `prepare` methods are mapped: the follow-up
+    // requests are what a server registers dynamically under, and denying
+    // those here would deny exactly the servers that register that way.
+    const session = await startSession({ capabilities: { callHierarchyProvider: true } });
+    const editor = {
+      getGrammar: () => ({ scopeName: "source.js", name: "JavaScript" }),
+      getPath: () => path.join(tempDir, "x.js"),
+    };
+    expect(session.supports("textDocument/prepareCallHierarchy", editor)).toBe(true);
+    expect(session.supports("textDocument/prepareTypeHierarchy", editor)).toBe(false);
   });
 
   it("resolves capability options from a dynamic registration, then the static one", async () => {
