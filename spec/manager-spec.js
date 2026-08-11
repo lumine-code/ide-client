@@ -1,5 +1,6 @@
 const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
+const ServerSession = require("../lib/server-session");
 const { languageIdForEditor } = require("../lib/language-ids");
 const C = require("../lib/converters");
 
@@ -335,6 +336,41 @@ describe("LanguageServerManager capabilities", () => {
     expect(first.general.positionEncodings).toEqual(["utf-16"]);
     const second = manager.buildClientCapabilities();
     expect(second.textDocument.hover).toEqual(first.textDocument.hover);
+  });
+
+  it("picks the running session that serves the request, not the first one", async () => {
+    // Two servers on one grammar is normal — a type checker beside a linter —
+    // and taking session[0] means whichever adapter registered first answers,
+    // which is activation order and says nothing about who can serve it.
+    const sessionWith = (id, capabilities) => {
+      const adapter = {
+        id,
+        displayName: id,
+        grammarScopes: ["source.js"],
+        resolveServer: async () => null,
+      };
+      const session = new ServerSession(manager, adapter, "/root", {});
+      session.state = "running";
+      session.capabilities = capabilities;
+      session.ready = Promise.resolve();
+      return session;
+    };
+    const linter = sessionWith("ide-a", {});
+    const checker = sessionWith("ide-b", { typeHierarchyProvider: true });
+    spyOn(manager, "sessionsForEditor").and.returnValue([linter, checker]);
+
+    const editor = {
+      getGrammar: () => ({ scopeName: "source.js", name: "JavaScript" }),
+      getPath: () => path.join("C:", "project", "x.js"),
+      getRootScopeDescriptor: () => ["source.js"],
+    };
+    expect(await manager.activeSessionForFeature(editor, "textDocument/prepareTypeHierarchy")).toBe(
+      checker,
+    );
+    // Nothing running serves it: null, rather than a session that cannot.
+    expect(await manager.activeSessionForFeature(editor, "textDocument/prepareCallHierarchy")).toBe(
+      null,
+    );
   });
 
   it("matches string and relative glob patterns", () => {

@@ -84,8 +84,10 @@ The service you receive:
 | `onDidChangeAdapters(fn)`                                         | `{ adapter, registered }` whenever an adapter is registered or unregistered.             |
 | `sessionForEditor(editor)`                                        | The session serving that editor, or `null`. May still be starting.                       |
 | `activeSessionForEditor(editor)`                                  | Resolves once the session has finished starting; `null` when absent, failed, or stopped. |
+| `activeSessionsForEditor(editor)`                                 | Every running session serving that editor, in adapter registration order.                |
+| `activeSessionForFeature(editor, method, feature?)`               | The first of those that serves `method`, honouring dynamic registrations and switches.   |
 | `getSessions()`                                                   | Every session.                                                                           |
-| `request(editor, method, params, opts)`                           | Sends an arbitrary LSP request through that editor's session. See the options below.     |
+| `request(editor, method, params, opts)`                           | Sends a request through the **first** session serving that editor, unchecked. See below. |
 | `onDidChangeSession(fn)`                                          | `{ session, state, error? }` on every state transition.                                  |
 | `onDidPublishDiagnostics(fn)`                                     | Raw `textDocument/publishDiagnostics` payloads.                                          |
 | `onDidChangeFeatures(fn)`                                         | `{ adapter }` when one of an adapter's feature switches changes.                         |
@@ -105,6 +107,24 @@ The service you receive:
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `signal`         | An `AbortSignal`. Aborting settles the returned promise straight away, whatever the server does next.                                                                                                                                       |
 | `cancelOnServer` | Whether aborting also sends `$/cancelRequest`. Defaults to `true`, except for `textDocument/references` and `workspace/executeCommand`, which are abandoned quietly — servers supersede the first themselves, and the second is a mutation. |
+
+### Picking a session
+
+More than one server on a grammar is normal, so `sessionForEditor` and `request` — both of which take the first — are only right when any of them will do. Otherwise resolve a session and use its own `request()`:
+
+```js
+const session = await client.activeSessionForFeature(
+  editor,
+  "textDocument/prepareTypeHierarchy",
+  "typeHierarchy",
+);
+if (!session) return; // nothing running here serves it
+const items = await session.request("textDocument/prepareTypeHierarchy", params);
+```
+
+Two reasons to hold the session rather than re-pick per request. A reply's `data` is opaque and meaningful only to the server that produced it, so a follow-up sent elsewhere is a protocol violation, not merely a routing preference. And `supports()` consults the dynamic registrations **before** the static capability, while the feature switches are honoured either way — a raw `session.capabilities.<x>Provider` read misses a server that registered late and finds `{}` for one that registers everything dynamically.
+
+Some capabilities the hub advertises on a consumer's behalf, because fragments are merged once at initialize and an external package cannot contribute one: `textDocument.callHierarchy` and `textDocument.typeHierarchy` are both declared for `hierarchy-view`.
 
 ## Minimal example
 

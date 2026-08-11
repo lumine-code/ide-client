@@ -28,6 +28,8 @@ describe("ide-client package", () => {
     expect(typeof service.adaptersForEditor).toBe("function");
     expect(typeof service.onDidChangeAdapters).toBe("function");
     expect(typeof service.sessionForEditor).toBe("function");
+    expect(typeof service.activeSessionsForEditor).toBe("function");
+    expect(typeof service.activeSessionForFeature).toBe("function");
     expect(typeof service.applyWorkspaceEdit).toBe("function");
   });
 

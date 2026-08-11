@@ -159,6 +159,18 @@ export interface LanguageServerService {
   sessionForEditor(editor: TextEditor): LanguageServerSession | null;
   /** Resolves once the session finished starting; null when absent, failed, or not running. */
   activeSessionForEditor(editor: TextEditor): Promise<LanguageServerSession | null>;
+  /** Every running session serving that editor, in adapter registration order. */
+  activeSessionsForEditor(editor: TextEditor): Promise<LanguageServerSession[]>;
+  /**
+   * The first running session that serves `method`, honouring dynamic
+   * registrations and the adapter's feature switches. Prefer this over
+   * `sessionForEditor` whenever more than one server can serve a grammar.
+   */
+  activeSessionForFeature(
+    editor: TextEditor,
+    method: string,
+    feature?: LanguageServerFeature,
+  ): Promise<LanguageServerSession | null>;
   getSessions(): LanguageServerSession[];
   onDidChangeSession(
     callback: (event: { session: LanguageServerSession; state: string; error?: Error }) => void,
@@ -172,6 +184,13 @@ export interface LanguageServerService {
     feature: LanguageServerFeature,
     editor?: TextEditor,
   ): boolean;
+  /**
+   * Sends a request through the FIRST session serving that editor, with no
+   * capability check. Where several servers can serve a grammar, pick one with
+   * `activeSessionForFeature` and call its own `request()` instead — a request
+   * carrying an opaque `data` from an earlier reply is only meaningful to the
+   * server that produced it.
+   */
   request(
     editor: TextEditor,
     method: string,
