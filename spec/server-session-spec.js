@@ -69,6 +69,21 @@ describe("ServerSession against a fake server", () => {
       dynamicRegistration: false,
       relatedDocumentSupport: true,
     });
+    expect(initialize.params.capabilities.textDocument.documentLink.tooltipSupport).toBe(true);
+    expect(initialize.params.capabilities.textDocument.colorProvider.dynamicRegistration).toBe(
+      true,
+    );
+    expect(initialize.params.capabilities.textDocument.foldingRange).toEqual({
+      dynamicRegistration: true,
+      lineFoldingOnly: false,
+      rangeLimit: 5000,
+    });
+    expect(initialize.params.capabilities.textDocument.selectionRange.dynamicRegistration).toBe(
+      true,
+    );
+    expect(initialize.params.capabilities.textDocument.linkedEditingRange.dynamicRegistration).toBe(
+      true,
+    );
     // Neither hierarchy has an implementation in the hub: both are advertised
     // on hierarchy-view's behalf, because an external package cannot
     // contribute a fragment of its own. A server that never saw these declares
@@ -109,6 +124,27 @@ describe("ServerSession against a fake server", () => {
     expect(initialized).toBeGreaterThan(-1);
     expect(configured).toBeGreaterThan(initialized);
     expect(received[configured].params.settings).toEqual({ example: { size: 2 } });
+  });
+
+  it("answers a server that asks for the current workspace folders", async () => {
+    const session = await startSession();
+    const initialized = (await receivedMessages(session)).find(
+      (message) => message.method === "initialize",
+    );
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 706,
+      method: "workspace/workspaceFolders",
+    });
+    await until(async () =>
+      (await receivedMessages(session)).some(
+        (message) => message.id === 706 && Object.hasOwn(message, "result"),
+      ),
+    );
+    const response = (await receivedMessages(session)).find(
+      (message) => message.id === 706 && Object.hasOwn(message, "result"),
+    );
+    expect(response.result).toEqual(initialized.params.workspaceFolders);
   });
 
   it("routes server-specific requests and notifications through adapter hooks", async () => {
