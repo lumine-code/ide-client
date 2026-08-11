@@ -463,37 +463,51 @@ describe("ManagedServers", () => {
   });
 
   describe("zip extraction", () => {
-    // Only bsdtar reads zip, and only Windows and macOS ship it. Linux release
-    // assets are all tarballs, so there the contract is a clear refusal rather
-    // than a silent failure.
+    // Only bsdtar reads zip. Windows ships it in System32 and macOS is /usr/bin/tar;
+    // Linux has GNU tar, which cannot, and every Linux release asset is a tarball.
     const tarBinary = bsdtarPath();
     const available = tarBinary && fs.existsSync(tarBinary);
 
-    it(
-      available ? "extracts a zip with bsdtar" : "refuses zip where bsdtar is absent",
-      async () => {
-        const destination = fs.mkdtempSync(path.join(scratch, "unzip-"));
-        if (!available) {
-          await expectAsync(
-            managed.extract(path.join(scratch, "x.zip"), destination, "x.zip"),
-          ).toBeRejectedWithError(/cannot be extracted/);
-          return;
-        }
-        const source = fs.mkdtempSync(path.join(scratch, "zip-src-"));
-        fs.writeFileSync(path.join(source, "testlang"), "zipped");
-        const archive = path.join(scratch, "testlang.zip");
-        await new Promise((resolve, reject) =>
-          require("child_process").execFile(
-            tarBinary,
-            ["-a", "-cf", archive, "-C", source, "testlang"],
-            (error) => (error ? reject(error) : resolve()),
-          ),
+    it("refuses, rather than fails obscurely, where bsdtar is absent", async () => {
+      // Driven through the export instead of the host platform, so the refusal
+      // is covered on all three rather than only wherever CI happens to lack it.
+      spyOn(ManagedServers, "bsdtarPath").and.returnValue(null);
+      const destination = fs.mkdtempSync(path.join(scratch, "unzip-"));
+      await expectAsync(
+        managed.extract(path.join(scratch, "x.zip"), destination, "x.zip"),
+      ).toBeRejectedWithError(/cannot be extracted/);
+    });
+
+    it("rejects an archive kind it does not handle", async () => {
+      // Every outcome of extract() is a rejection, never a synchronous throw.
+      const destination = fs.mkdtempSync(path.join(scratch, "unknown-"));
+      await expectAsync(
+        managed.extract(path.join(scratch, "x.rar"), destination, "x.rar"),
+      ).toBeRejectedWithError(/Unsupported archive/);
+    });
+
+    it("extracts a zip with bsdtar", async () => {
+      if (!available) {
+        pending(
+          `bsdtar is not available on ${process.platform}; the refusal above is the contract`,
         );
+        return;
+      }
+      const destination = fs.mkdtempSync(path.join(scratch, "unzip-"));
+      const source = fs.mkdtempSync(path.join(scratch, "zip-src-"));
+      fs.writeFileSync(path.join(source, "testlang"), "zipped");
+      const archive = path.join(scratch, "testlang.zip");
+      await new Promise((resolve, reject) =>
+        require("child_process").execFile(
+          tarBinary,
+          ["-a", "-cf", archive, "-C", source, "testlang"],
+          (error) => (error ? reject(error) : resolve()),
+        ),
+      );
 
-        await managed.extract(archive, destination, "testlang.zip");
+      await managed.extract(archive, destination, "testlang.zip");
 
-        expect(fs.readFileSync(path.join(destination, "testlang"), "utf8")).toBe("zipped");
-      },
-    );
+      expect(fs.readFileSync(path.join(destination, "testlang"), "utf8")).toBe("zipped");
+    });
   });
 });
