@@ -104,6 +104,18 @@ export interface LanguageServerAdapter {
   /** Config key paths whose changes re-push getSettings() to running sessions. */
   settingsKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
+  /** Handle a server-specific JSON-RPC request not implemented by the LSP core. */
+  handleServerRequest?(
+    method: string,
+    params: unknown,
+    context: { session: LanguageServerSession },
+  ): unknown | Promise<unknown>;
+  /** Observe a server-specific notification while it is also emitted by the session. */
+  handleServerNotification?(
+    method: string,
+    params: unknown,
+    context: { session: LanguageServerSession },
+  ): void | Promise<void>;
   /**
    * Fallback feature switches, for an adapter with no config namespace to hold
    * them. A package declares them under `features` in its `package.json`

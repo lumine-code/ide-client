@@ -46,6 +46,8 @@ interface LanguageServerAdapter {
   getSettings?(): unknown;
   settingsKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
+  handleServerRequest?(method: string, params: unknown, context: { session: LanguageServerSession }): unknown;
+  handleServerNotification?(method: string, params: unknown, context: { session: LanguageServerSession }): void;
   features?: Partial<Record<LanguageServerFeature, boolean>>;
   managedServer?: ManagedServerDescriptor;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
@@ -136,6 +138,8 @@ A `"project-root"` server that declares `workspace.workspaceFolders.supported` *
 The `languageId` sent to the server is resolved in order: `languageIdForScope(scopeName)`, then the built-in scope table, then the blanket `languageId`. Override only the level you actually need.
 
 `getSettings` is pushed as `workspace/didChangeConfiguration` after initialize, and re-pushed whenever a config key listed in `settingsKeyPaths` changes. Without `settingsKeyPaths` the settings are sent once and never refreshed.
+
+`handleServerRequest` and `handleServerNotification` cover protocol extensions owned by one server rather than LSP itself. Core client handlers still take precedence; the adapter sees only otherwise-unhandled traffic. Requests must return the JSON-RPC result the server expects, while notifications are also emitted through `session.onNotification` after the adapter observes them.
 
 `transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
 

@@ -98,6 +98,48 @@ describe("ServerSession against a fake server", () => {
     expect(received[configured].params.settings).toEqual({ example: { size: 2 } });
   });
 
+  it("routes server-specific requests and notifications through adapter hooks", async () => {
+    const filePath = path.join(tempDir, "custom.js");
+    fs.writeFileSync(filePath, "const custom = true;\n");
+    const requests = [];
+    const notifications = [];
+    let requestSession;
+    let notificationSession;
+    const session = await startSession(
+      {
+        capabilities: { textDocumentSync: 2 },
+        onOpen: [
+          { jsonrpc: "2.0", id: 707, method: "fake/customRequest", params: { value: 1 } },
+          { jsonrpc: "2.0", method: "fake/customNotification", params: { value: 2 } },
+        ],
+      },
+      {
+        handleServerRequest(method, params, context) {
+          requests.push({ method, params });
+          requestSession = context.session;
+          return { accepted: true };
+        },
+        handleServerNotification(method, params, context) {
+          notifications.push({ method, params });
+          notificationSession = context.session;
+        },
+      },
+    );
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+    await until(() => requests.length === 1 && notifications.length === 1);
+
+    expect(requests).toEqual([{ method: "fake/customRequest", params: { value: 1 } }]);
+    expect(notifications).toEqual([{ method: "fake/customNotification", params: { value: 2 } }]);
+    expect(requestSession).toBe(session);
+    expect(notificationSession).toBe(session);
+    await until(async () =>
+      (await receivedMessages(session)).some(
+        (message) => message.id === 707 && message.result?.accepted === true,
+      ),
+    );
+  });
+
   it("refuses servers that pick an unsupported position encoding", async () => {
     const launch = {
       command: process.execPath,
