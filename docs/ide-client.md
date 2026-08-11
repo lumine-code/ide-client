@@ -47,6 +47,7 @@ interface LanguageServerAdapter {
   settingsKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
   features?: Partial<Record<LanguageServerFeature, boolean>>;
+  managedServer?: ManagedServerDescriptor;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   restoreDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   transformServerCapabilities?(caps: Record<string, unknown>): Record<string, unknown>;
@@ -81,6 +82,10 @@ The service you receive:
 | `featureEnabled(adapter, feature, editor?)`                       | Whether that feature is on for that adapter, in that editor's scope.                     |
 | `onDidLog(fn)`, `getLog(adapterId)`                               | Server stderr and protocol log.                                                          |
 | `restart(session)`, `stop(session)`                               | Lifecycle control.                                                                       |
+| `installServer(adapterId, opts?)`                                 | Fetches and installs the server; reports its own progress and failure.                   |
+| `updateServer(adapterId)`                                         | Installs the newest release, or resolves unchanged when already current.                 |
+| `uninstallServer(adapterId)`                                      | Removes the managed copy only.                                                           |
+| `managedServer(adapterId)`                                        | The installed copy, or `null`.                                                           |
 | `applyWorkspaceEdit(edit, label)`                                 | Applies an LSP `WorkspaceEdit` to the workspace.                                         |
 | `openNotebook`, `changeNotebook`, `saveNotebook`, `closeNotebook` | The notebook document half of LSP.                                                       |
 
@@ -137,6 +142,55 @@ The `languageId` sent to the server is resolved in order: `languageIdForScope(sc
 `session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
 
 `transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
+
+## Managed servers
+
+An adapter that declares `managedServer` lets the editor fetch its server, keep it current and remove it again, and appears in the Manage Servers list. Nothing else changes: the descriptor is data, and `resolveServer` stays the only thing that decides what runs.
+
+```ts
+type ManagedServerDescriptor =
+  | {
+      source: "github-release";
+      displayName?: string;
+      repository: string; // "owner/name"
+      assetFor(c: { platform: string; arch: string; version: string }): string | null;
+      checksum: "sha256-sidecar" | "none";
+      binary: string; // base name, located wherever it sits in the archive
+      strip?: number;
+    }
+  | {
+      source: "npm";
+      displayName?: string;
+      packages: string[]; // extracted side by side; the first decides the version
+      module: string; // entry module, relative to the install directory
+      bundled?: boolean; // the package also ships the server, so uninstall falls back
+    };
+```
+
+Everything lands in `<configDir>/language-servers/<adapter.id>/`, one directory per adapter whatever the source. The installed copy is handed back on `context.managedServer`, so `resolveServer` reads one field rather than knowing that layout:
+
+```js
+async resolveServer(context) {
+  const configured = lumine.config.get("my-package.serverPath");
+  if (configured) return { command: configured };
+  if (context.managedServer)
+    return { command: context.managedServer.binaryPath, version: context.managedServer.version };
+  return { command: await which("my-langserver") } ?? null;
+}
+```
+
+That order is the convention: an explicit setting wins, then the copy the user asked the editor to install, then whatever is on `PATH` — which is also where uninstalling lands.
+
+Four things are worth knowing before writing a descriptor:
+
+- **`assetFor` returns an exact file name**, never a pattern. A release commonly carries other archives whose names share a prefix — tinymist publishes `tinymist-docs-tool-<target>` beside the server's own — and a prefix match fetches the wrong one. Returning `null` says this platform has no build, which is reported rather than guessed at.
+- **`checksum` is stated, not inferred.** `"none"` records a source that publishes nothing to verify against; texlab is one today. Making that a value in the descriptor keeps the gap visible in the adapter instead of being a step the installer quietly skips.
+- **`binary` is a base name.** Archives put it at the root or one directory down, and it is searched for rather than predicted.
+- **An npm source is an upgrade tier when the package already ships the server.** Set `bundled: true` and keep the dependency: the pinned copy stays the floor, so uninstalling drops back to it and can never leave the user with nothing. `ide-pyright` works this way.
+
+Descriptors are validated at `registerAdapter`, not at install time, so a typo surfaces when the package activates.
+
+Installing, updating and removing all stop the adapter's sessions first, swap the directory, and re-attach — Windows refuses to replace a running executable, and a server that keeps running through the swap would go on serving from a directory that no longer exists.
 
 ## Features
 

@@ -20,6 +20,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Semantic tokens**: layers server-computed highlighting over the grammar's own; disabled by default.
 - **Server list**: lists every running server with its state and what it covers — a project root, the workspace, or a file opened outside the project — and restarts, stops, or opens the log of any of them without leaving the list.
 - **Server details**: reports what a server says about itself — the process it runs in, the command that started it, the documents and diagnostics it holds, and the capabilities it advertised.
+- **Managed servers**: downloads, updates and removes the language servers whose adapter says where to get them, verifying each download against the checksum its source publishes.
 - **Status bar**: counts the running servers in a permanent status-bar item, flags the failed ones, and opens the server list on click.
 - **Logging**: keeps a per-server log buffer with optional protocol tracing, and reports a server that has exited more often than it may be restarted with a way straight into its log.
 
@@ -32,6 +33,7 @@ To install `ide-client` search for _ide-client_ in the Install pane of the Lumin
 Commands available in `lumine-workspace`:
 
 - `ide-client:servers`: list the running language servers and act on one of them,
+- `ide-client:manage-servers`: list the language servers the editor can install and act on one of them,
 - `ide-client:restart`: restart the language servers for the active editor,
 - `ide-client:toggle-problems`: open the linter panel with the server diagnostics,
 - `ide-client:format`: format the active document,
@@ -45,6 +47,13 @@ Commands available in `.ide-client-session-menu`:
 - `ide-client:stop-server`: stop the selected server until a matching editor opens again,
 - `ide-client:show-server-log`: open the selected server's log in a new editor,
 - `ide-client:show-problems`: open the linter panel with the diagnostics of every server.
+
+Commands available in `.ide-client-managed-servers`:
+
+- `ide-client:install-server`: download and install the selected server,
+- `ide-client:update-server`: install the newest release of the selected server,
+- `ide-client:uninstall-server`: remove the copy the editor installed,
+- `ide-client:check-server-updates`: look up the newest release of every installable server.
 
 ## Usage
 

@@ -9,5 +9,16 @@
     "alt-delete": "ide-client:stop-server",
     "alt-l": "ide-client:show-server-log",
     "alt-p": "ide-client:show-problems"
+  },
+
+  // Actions of the Manage Servers list, on the same terms. Enter already runs
+  // whichever of install and update the selected row is for, but both are bound
+  // as well: which one Enter means depends on the row's state, and a user who
+  // wants the other one should not have to reason about that.
+  ".ide-client-managed-servers lumine-text-editor[mini]": {
+    "alt-i": "ide-client:install-server",
+    "alt-u": "ide-client:update-server",
+    "alt-delete": "ide-client:uninstall-server",
+    "alt-c": "ide-client:check-server-updates"
   }
 }

@@ -18,7 +18,50 @@ export interface ServerResolutionContext {
   projectPaths: string[];
   configDirPath: string;
   managedStoragePath: string;
+  /** The copy the editor installed for this adapter, or null when there is none. */
+  managedServer: ManagedServerInstall | null;
 }
+export interface ManagedServerInstall {
+  version: string;
+  source: "github-release" | "npm";
+  installedAt: string;
+  directory: string;
+  /** Absolute path of the executable, for a github-release source. */
+  binaryPath: string | null;
+  /** Absolute path of the entry module, for an npm source. */
+  modulePath: string | null;
+}
+/**
+ * Where an adapter's server can be fetched from, so the editor can install,
+ * update and remove it. Optional: an adapter without one is never offered in
+ * the Manage Servers list.
+ */
+export type ManagedServerDescriptor =
+  | {
+      source: "github-release";
+      /** Shown wherever the server is named; defaults to the adapter's displayName. */
+      displayName?: string;
+      /** `owner/name` of the GitHub repository publishing the releases. */
+      repository: string;
+      /** Exact asset file name for this platform, or null when none is published. */
+      assetFor(context: { platform: string; arch: string; version: string }): string | null;
+      /** Stated, never inferred — `none` records a source that publishes no checksums. */
+      checksum: "sha256-sidecar" | "none";
+      /** Base name of the executable inside the archive; located wherever it sits. */
+      binary: string;
+      /** Leading path components to drop while extracting. Defaults to 0. */
+      strip?: number;
+    }
+  | {
+      source: "npm";
+      displayName?: string;
+      /** Registry packages to extract side by side; the first decides the version. */
+      packages: string[];
+      /** Entry module, relative to the install directory. */
+      module: string;
+      /** True when the adapter package also ships the server, so uninstall falls back. */
+      bundled?: boolean;
+    };
 export interface DocumentTextContext {
   editor: TextEditor;
   uri: string;
@@ -50,6 +93,8 @@ export interface LanguageServerAdapter {
   documentSelector?: Array<{ language?: string; scheme?: string; pattern?: string }>;
   sessionScope?: "project-root" | "workspace";
   resolveServer(context: ServerResolutionContext): Promise<ServerLaunch | null>;
+  /** Opt in to the editor installing, updating and removing this server. */
+  managedServer?: ManagedServerDescriptor;
   getInitializationOptions?(context: {
     rootPath: string;
     rootUri: string;
@@ -122,6 +167,13 @@ export interface LanguageServerService {
   restart(session: LanguageServerSession): Promise<LanguageServerSession>;
   stop(session: LanguageServerSession): Promise<void>;
   getLog(adapterId: string): string;
+  /** Fetch and install this adapter's server; reports progress and failure itself. */
+  installServer(adapterId: string, options?: { version?: string }): Promise<object>;
+  /** Install the newest release, or resolve unchanged when already current. */
+  updateServer(adapterId: string): Promise<object>;
+  /** Remove only the managed copy; a PATH or bundled server is left alone. */
+  uninstallServer(adapterId: string): Promise<void>;
+  managedServer(adapterId: string): ManagedServerInstall | null;
   applyWorkspaceEdit(edit: object, label?: string): Promise<boolean>;
   openNotebook(session: LanguageServerSession, notebook: object, cells?: object[]): void;
   changeNotebook(session: LanguageServerSession, notebook: object, change: object): void;
