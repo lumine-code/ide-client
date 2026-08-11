@@ -347,6 +347,12 @@ describe("LanguageServerManager capabilities", () => {
     expect(manager.globMatches({ baseUri: base, pattern: "lib/*.ts" }, filePath)).toBe(false);
   });
 
+  it("honours Windows path casing in server-supplied capability globs", () => {
+    const editorPath = "C:\\Project\\src\\main.js";
+    const serverPattern = "c:/project/src/main.js";
+    expect(manager.globMatches(serverPattern, editorPath)).toBe(process.platform === "win32");
+  });
+
   it("scopes dynamic registrations by document selector", () => {
     const session = { adapter: { grammarScopes: ["source.python"] } };
     manager.registerCapabilities(session, [
