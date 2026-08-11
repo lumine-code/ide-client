@@ -47,7 +47,9 @@ export type ManagedServerDescriptor =
       assetFor(context: { platform: string; arch: string; version: string }): string | null;
       /** Stated, never inferred — `none` records a source that publishes no checksums. */
       checksum: "sha256-sidecar" | "none";
-      /** Base name of the executable inside the archive; located wherever it sits. */
+      /** Whether the release asset is extracted or installed as the executable itself. */
+      assetType?: "archive" | "binary";
+      /** Base name of the installed executable; located inside an archive when applicable. */
       binary: string;
       /** Leading path components to drop while extracting. Defaults to 0. */
       strip?: number;

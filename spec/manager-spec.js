@@ -486,6 +486,72 @@ describe("LanguageServerManager capabilities", () => {
     expect(changes.map((change) => change.type)).toEqual([1, 3, 1]);
   });
 
+  it("routes file operations through the server's static filters", () => {
+    const notifications = [];
+    const markdownFilter = {
+      scheme: "file",
+      pattern: {
+        glob: "**/*.{md,markdown}",
+        matches: "file",
+        options: { ignoreCase: true },
+      },
+    };
+    const session = {
+      state: "running",
+      adapter: { grammarScopes: [] },
+      capabilities: {
+        workspace: {
+          fileOperations: {
+            didCreate: { filters: [markdownFilter] },
+            didDelete: { filters: [markdownFilter] },
+            didRename: { filters: [markdownFilter] },
+          },
+        },
+      },
+      notify: (method, params) => notifications.push({ method, params }),
+    };
+    manager.sessions.set("fake:root", session);
+    const root = path.join("C:", "project");
+    manager.routeFileEvents([
+      { action: "created", path: path.join(root, "New.MD") },
+      { action: "created", path: path.join(root, "ignored.txt") },
+      { action: "deleted", path: path.join(root, "old.markdown") },
+      {
+        action: "renamed",
+        oldPath: path.join(root, "before.md"),
+        path: path.join(root, "after.md"),
+      },
+    ]);
+
+    expect(notifications.map(({ method }) => method)).toEqual([
+      "workspace/didCreateFiles",
+      "workspace/didDeleteFiles",
+      "workspace/didRenameFiles",
+    ]);
+    expect(notifications[0].params.files).toEqual([
+      { uri: C.pathToUri(path.join(root, "New.MD")) },
+    ]);
+    expect(notifications[1].params.files).toEqual([
+      { uri: C.pathToUri(path.join(root, "old.markdown")) },
+    ]);
+    expect(notifications[2].params.files).toEqual([
+      {
+        oldUri: C.pathToUri(path.join(root, "before.md")),
+        newUri: C.pathToUri(path.join(root, "after.md")),
+      },
+    ]);
+    manager.sessions.clear();
+  });
+
+  it("advertises exactly the file operations it routes", () => {
+    expect(manager.buildClientCapabilities().workspace.fileOperations).toEqual({
+      dynamicRegistration: false,
+      didCreate: true,
+      didRename: true,
+      didDelete: true,
+    });
+  });
+
   it("notifies running sessions about workspace folder changes", () => {
     const notifications = [];
     const session = {

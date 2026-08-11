@@ -120,6 +120,12 @@ describe("ManagedServers", () => {
       expect(compareVersions("1.1.0-rc.1", "1.1.0")).toBeLessThan(0);
       expect(compareVersions("1.1.0", "1.1.0-rc.1")).toBeGreaterThan(0);
     });
+
+    it("orders calendar-versioned releases by their complete date", () => {
+      expect(compareVersions("2026-02-08", "2026-02-01")).toBeGreaterThan(0);
+      expect(compareVersions("2026-01-28", "2026-02-01")).toBeLessThan(0);
+      expect(compareVersions("2026-02-08", "2026-02-08")).toBe(0);
+    });
   });
 
   describe("parseSidecar", () => {
@@ -145,6 +151,15 @@ describe("ManagedServers", () => {
       expect(() =>
         manager.registerAdapter(adapterFor(githubDescriptor({ binary: undefined }))),
       ).toThrowError(/managedServer\.binary/);
+      expect(() =>
+        manager.registerAdapter(adapterFor(githubDescriptor({ binary: "../testlang" }))),
+      ).toThrowError(/managedServer\.binary/);
+    });
+
+    it("rejects an unknown github release asset type", () => {
+      expect(() =>
+        manager.registerAdapter(adapterFor(githubDescriptor({ assetType: "directory" }))),
+      ).toThrowError(/managedServer\.assetType/);
     });
 
     it("rejects an npm descriptor with no packages or module", () => {
@@ -206,6 +221,32 @@ describe("ManagedServers", () => {
       expect(managed.installFor(adapter).binaryPath).toBe(
         path.join(storageRoot, "ide-test", "testlang"),
       );
+    });
+
+    it("installs a raw release executable under the declared binary name", async () => {
+      const asset = "testlang-linux-x64";
+      const rawUrl = `https://github.com/example/testlang/releases/download/v1.2.3/${asset}`;
+      const payload = Buffer.from("native executable");
+      routes["https://api.github.com/repos/example/testlang/releases/latest"] = JSON.stringify({
+        tag_name: "v1.2.3",
+      });
+      routes[rawUrl] = payload;
+      const adapter = register(
+        githubDescriptor({
+          assetFor: () => asset,
+          assetType: "binary",
+          checksum: "none",
+        }),
+      );
+
+      const record = await managed.install("ide-test");
+
+      expect(record.asset).toBe(asset);
+      expect(record.assetType).toBe("binary");
+      expect(record.binary).toBe("testlang");
+      expect(fs.readFileSync(managed.installFor(adapter).binaryPath)).toEqual(payload);
+      if (process.platform !== "win32")
+        expect(fs.statSync(managed.installFor(adapter).binaryPath).mode & 0o111).not.toBe(0);
     });
 
     it("requests exactly the asset name the descriptor computed", async () => {
