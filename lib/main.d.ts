@@ -74,6 +74,8 @@ export type LanguageServerFeature =
   | "signature"
   | "definition"
   | "references"
+  | "callHierarchy"
+  | "typeHierarchy"
   | "symbols"
   | "outline"
   | "format"

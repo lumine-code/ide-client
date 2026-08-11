@@ -107,6 +107,31 @@ describe("feature switches", () => {
       expect(session.supports("textDocument/documentSymbol", editor, "outline")).toBe(false);
       expect(session.supports("textDocument/documentSymbol", editor, "symbols")).toBe(true);
     });
+    it("gates each hierarchy on its own switch", () => {
+      // A server that offers both is normal, and wanting only one of them is
+      // too — clangd's subtypes need an index its caller may not want built.
+      const session = sessionFor(adapterFor("ide-a"), {
+        callHierarchyProvider: true,
+        typeHierarchyProvider: true,
+      });
+      const editor = stubEditor();
+      lumine.config.set("ide-a.features.callHierarchy", false);
+      expect(session.supports("textDocument/prepareCallHierarchy", editor)).toBe(false);
+      expect(session.supports("textDocument/prepareTypeHierarchy", editor)).toBe(true);
+    });
+    it("switches off a hierarchy's follow-up requests with it", () => {
+      // Half a hierarchy is worse than none: the root would open and every
+      // expansion would come back empty.
+      const session = sessionFor(adapterFor("ide-a"), { typeHierarchyProvider: true });
+      const editor = stubEditor();
+      // On, they pass through: a follow-up request carries no capability field
+      // of its own, which is deliberate — it is what a server registering
+      // dynamically registers under, and mapping it would deny that server.
+      expect(session.supports("typeHierarchy/supertypes", editor)).toBe(true);
+      lumine.config.set("ide-a.features.typeHierarchy", false);
+      expect(session.supports("typeHierarchy/supertypes", editor)).toBe(false);
+      expect(session.supports("typeHierarchy/subtypes", editor)).toBe(false);
+    });
   });
 
   describe("routing between two servers", () => {

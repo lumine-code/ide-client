@@ -208,7 +208,7 @@ Installing, updating and removing all stop the adapter's sessions first, swap th
 
 More than one adapter commonly covers one grammar — a type checker beside a linter — and for the requests whose answers cannot be merged the hub has to pick one server. Left to itself it picks whichever adapter registered first, which is package activation order and says nothing about which server the user wants. The feature switches are how that choice is expressed: a switched-off server is skipped, and the next one that can serve the request answers instead.
 
-The vocabulary is `diagnostics`, `autocomplete`, `hover`, `signature`, `definition`, `references`, `symbols`, `outline`, `format`, `rename`, `codeActions`, `inlayHints`, `codeLens`, and `semanticTokens`. They are names for what the user sees, not protocol methods: one switch covers all three formatting requests, and `symbols` and `outline` split `textDocument/documentSymbol` between go-to-symbol and the outline panel.
+The vocabulary is `diagnostics`, `autocomplete`, `hover`, `signature`, `definition`, `references`, `callHierarchy`, `typeHierarchy`, `symbols`, `outline`, `format`, `rename`, `codeActions`, `inlayHints`, `codeLens`, and `semanticTokens`. They are names for what the user sees, not protocol methods: one switch covers all three formatting requests, and `symbols` and `outline` split `textDocument/documentSymbol` between go-to-symbol and the outline panel.
 
 Declare them in your `package.json` under `features`, listing **only what your server actually advertises** — a switch for a capability the server never had is a control that does nothing:
 
