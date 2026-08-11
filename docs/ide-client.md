@@ -46,8 +46,16 @@ interface LanguageServerAdapter {
   getSettings?(): unknown;
   settingsKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
-  handleServerRequest?(method: string, params: unknown, context: { session: LanguageServerSession }): unknown;
-  handleServerNotification?(method: string, params: unknown, context: { session: LanguageServerSession }): void;
+  handleServerRequest?(
+    method: string,
+    params: unknown,
+    context: { session: LanguageServerSession },
+  ): unknown;
+  handleServerNotification?(
+    method: string,
+    params: unknown,
+    context: { session: LanguageServerSession },
+  ): void;
   features?: Partial<Record<LanguageServerFeature, boolean>>;
   managedServer?: ManagedServerDescriptor;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
