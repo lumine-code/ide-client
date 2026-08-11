@@ -4,6 +4,13 @@ const ServerSession = require("../lib/server-session");
 const { languageIdForEditor } = require("../lib/language-ids");
 const C = require("../lib/converters");
 
+// Lets an awaited chain that a fake-clock timer started run to its end. The
+// timers are faked, so nothing here waits on real time; only the microtasks
+// between one `await` and the next need letting through.
+const flushPromises = async () => {
+  for (let tick = 0; tick < 50; tick++) await Promise.resolve();
+};
+
 describe("LanguageServerManager adapters", () => {
   let manager;
   beforeEach(() => {
@@ -657,15 +664,25 @@ describe("LanguageServerManager restart", () => {
   });
   afterEach(async () => manager.deactivate());
 
+  // Not `sessionAt`: these are about what the supervisor reads off a session,
+  // and every field it reads has to be stated here rather than defaulted.
+  const failedSession = (fields = {}) => ({
+    adapter: { id: "test", displayName: "Test Language Server" },
+    restartCount: 0,
+    failureCount: 0,
+    runningSince: null,
+    state: "failed",
+    stop: async () => {},
+    ...fields,
+  });
+
+  afterEach(() => lumine.config.unset("ide-client.restartLimit"));
+
   it("says so once when a server has exited more often than it may be restarted", () => {
     // Giving up was silent: the retries stopped, the status item read "failed",
     // and the reason sat unread in the log.
     lumine.config.set("ide-client.restartLimit", 2);
-    const session = {
-      adapter: { id: "test", displayName: "Test Language Server" },
-      restartCount: 2,
-      state: "failed",
-    };
+    const session = failedSession({ failureCount: 2 });
     const exhausted = [];
     manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
 
@@ -675,22 +692,144 @@ describe("LanguageServerManager restart", () => {
     manager.scheduleRestart(session);
 
     expect(exhausted).toEqual([session]);
-    lumine.config.unset("ide-client.restartLimit");
   });
 
   it("keeps quiet while it still has restarts left", () => {
     lumine.config.set("ide-client.restartLimit", 3);
-    const session = {
-      adapter: { id: "test", displayName: "Test Language Server" },
-      restartCount: 0,
-      state: "failed",
-    };
+    const session = failedSession();
     const exhausted = [];
     manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
     manager.scheduleRestart(session);
     expect(exhausted).toEqual([]);
-    expect(session.restartCount).toBe(1);
-    lumine.config.unset("ide-client.restartLimit");
+    expect(session.failureCount).toBe(1);
+  });
+
+  it("gives up on a server that dies on every start", async () => {
+    // The failure run used to live on the session, and a restart replaces the
+    // session, so the run was never longer than one: the status bar read
+    // "failed", the details read "restarted 1×", and the limit was never
+    // reached however often the server died. Driven through the real restart,
+    // since carrying the run across the replacements is the whole fix.
+    lumine.config.set("ide-client.restartLimit", 3);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      // What a server that dies during the handshake leaves behind: a failed
+      // session, and a rejection for whoever asked for the start.
+      this.setState("failed", new Error("Server exited (1)"));
+      throw new Error("Server exited (1)");
+    });
+    const launch = { command: "does-not-exist" };
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => launch,
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = new ServerSession(manager, adapter, rootPath, launch);
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const exhausted = [];
+    manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
+
+    manager.scheduleRestart(session);
+    // Longer than the longest backoff, so each round is one whole retry.
+    for (let round = 0; round < 5; round++) {
+      advanceClock(30000);
+      await flushPromises();
+    }
+
+    expect(exhausted.length).toBe(1);
+    // Three restarts, each of which died again — which is what the user is
+    // told, and what the details report about the server that is left.
+    expect(exhausted[0].failureCount).toBe(3);
+    expect(exhausted[0].restartCount).toBe(3);
+    // And nothing keeps trying behind the notification.
+    expect(manager.restartTimers.size).toBe(0);
+  });
+
+  it("starts a fresh run for a restart somebody asked for", async () => {
+    // The user acted — installed the binary, corrected a setting — and what
+    // they fixed deserves the same patience the first start had.
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.setState("running");
+    });
+    const launch = { command: "server" };
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => launch,
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const key = manager.keyFor(adapter, rootPath);
+    const session = new ServerSession(manager, adapter, rootPath, launch);
+    session.restartCount = 4;
+    session.failureCount = 2;
+    manager.sessions.set(key, session);
+
+    await manager.restart(session);
+
+    const replacement = manager.sessions.get(key);
+    expect(replacement).not.toBe(session);
+    // Still the same server as far as the details are concerned.
+    expect(replacement.restartCount).toBe(5);
+    expect(replacement.failureCount).toBe(0);
+  });
+
+  it("gives a server that stayed up its retries back", () => {
+    // A crash after hours of work is not the same incident as the one before
+    // it, and counting them together would retire a server over an afternoon
+    // weeks earlier.
+    lumine.config.set("ide-client.restartLimit", 3);
+    const session = failedSession({ failureCount: 3, runningSince: Date.now() });
+    const exhausted = [];
+    manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
+    advanceClock(60000);
+
+    manager.scheduleRestart(session);
+
+    expect(exhausted).toEqual([]);
+    expect(session.failureCount).toBe(1);
+  });
+
+  it("holds a server that only just started to its remaining retries", () => {
+    lumine.config.set("ide-client.restartLimit", 3);
+    const session = failedSession({ failureCount: 3, runningSince: Date.now() });
+    const exhausted = [];
+    manager.onDidExhaustRestarts((event) => exhausted.push(event.session));
+    advanceClock(5000);
+
+    manager.scheduleRestart(session);
+
+    expect(exhausted).toEqual([session]);
+  });
+
+  it("keeps one retry in flight for a session", () => {
+    // A start that fails is reported by the exit handler and by the caller that
+    // awaited it. Two timers for one session would double the servers with
+    // every round.
+    lumine.config.set("ide-client.restartLimit", 3);
+    const session = failedSession();
+    manager.sessions.set("test:root", session);
+
+    manager.scheduleRestart(session);
+    manager.scheduleRestart(session);
+
+    expect(manager.restartTimers.size).toBe(1);
+    expect(session.failureCount).toBe(1);
+  });
+
+  it("drops a pending retry when the session is forgotten", () => {
+    lumine.config.set("ide-client.restartLimit", 3);
+    const session = failedSession();
+    manager.sessions.set("test:root", session);
+    spyOn(manager, "restart");
+
+    manager.scheduleRestart(session);
+    manager.forget(session);
+    advanceClock(30000);
+
+    expect(manager.restart).not.toHaveBeenCalled();
+    expect(manager.restartTimers.size).toBe(0);
   });
 
   it("declines to restart a server the adapter says is not installed", async () => {

@@ -165,7 +165,11 @@ describe("ide-client package", () => {
 
     const session = {
       adapter: { id: "ide-example", displayName: "Example Language Server" },
+      // The failure run, which is what the notification counts: one restart
+      // that died again is what used the single restart this allows.
+      failureCount: 1,
       restartCount: 1,
+      runningSince: null,
       state: "failed",
     };
     // Through the manager, so this covers the subscription rather than the

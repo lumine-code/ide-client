@@ -51,7 +51,7 @@
     },
     "restartLimit": {
       "title": "Maximum Automatic Restarts",
-      "description": "How many times a crashed language server is restarted automatically before giving up.",
+      "description": "How many times in a row a crashed language server is restarted automatically before giving up. A server that stays up for a minute gets its restarts back.",
       "type": "integer",
       "minimum": 0,
       "default": 3

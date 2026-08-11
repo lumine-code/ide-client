@@ -179,6 +179,8 @@ The core handlers include server-initiated `workspace/workspaceFolders`. Its res
 
 `transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
 
+A server that exits on its own is restarted on a growing delay, up to `restartLimit` times in a row, and the session is replaced each time — an adapter that holds one has to follow `onDidChangeSession` rather than keep the reference. The limit counts a failure run rather than the life of the window: a server that stays up for a minute has its restarts back, and one that dies on every start reaches the limit and is reported to the user with a way into its log. A restart somebody asked for, through `restart(session)` or the server list, starts a new run. A server that fails its very first start is reported once and not retried, since nothing about it has worked yet.
+
 ## Managed servers
 
 An adapter that declares `managedServer` lets the editor fetch its server, keep it current and remove it again, and appears in the Manage Servers list. Nothing else changes: the descriptor is data, and `resolveServer` stays the only thing that decides what runs.
