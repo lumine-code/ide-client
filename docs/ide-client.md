@@ -224,7 +224,7 @@ The hub reads `<adapter id>.features.<name>`, so the key path follows from your 
 
 The `features` field on the adapter object is the fallback for an adapter with no config namespace — a custom server from `language-servers.json`, whose id carries a colon. A package should use `configSchema`, which the user can actually change; that wins over the field.
 
-`diagnostics` is the odd one: they are pushed rather than requested, so switching it off hides what the server sent rather than stopping it being sent, and switching it back on restores it without a restart.
+`diagnostics` is the odd one: servers may push them or expose the LSP 3.17 pull model. Switching diagnostics off hides stored results; pull-capable servers are also not queried until the switch is enabled again.
 
 ## Teardown
 

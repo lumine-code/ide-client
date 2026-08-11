@@ -12,7 +12,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Overlap removal**: answers that several servers repeat, such as a shared signature line, are shown once.
 - **Transports**: spawns servers over stdio, IPC, or socket connections with JSON-RPC framing.
 - **Synchronization**: keeps open documents in sync with incremental or full-text updates.
-- **Diagnostics**: forwards server diagnostics to the linter package when installed.
+- **Diagnostics**: supports both pushed and LSP 3.17 pull diagnostics, forwarding results to the linter package when installed.
 - **Completions**: serves language-server completions to autocomplete.
 - **Symbols**: serves document and project symbols to the symbol hub.
 - **Inlay hints**: renders inline type and parameter-name labels for the visible part of the editor.

@@ -3,6 +3,7 @@
 //   capabilities  initialize result capabilities
 //   serverInfo    initialize result serverInfo
 //   responses     { method: cannedResult } for any other request
+//   responseSequences { method: [cannedResult, ...] } consumed per request
 //   hang          methods recorded but never answered, to keep a request in flight
 //   onOpen        messages the server emits after receiving didOpen
 // Test-only requests: test/getReceived returns every message received so far,
@@ -42,7 +43,8 @@ function handle(message) {
   }
   if ((config.hang || []).includes(method)) return;
   if (id != null) {
-    const canned = (config.responses || {})[method];
+    const sequence = (config.responseSequences || {})[method];
+    const canned = sequence?.length ? sequence.shift() : (config.responses || {})[method];
     reply(id, canned === undefined ? null : canned);
   }
 }

@@ -65,6 +65,11 @@ describe("ServerSession against a fake server", () => {
     expect(initialize.params.capabilities.textDocument.publishDiagnostics.tagSupport).toEqual({
       valueSet: [1, 2],
     });
+    expect(initialize.params.capabilities.textDocument.diagnostic).toEqual({
+      dynamicRegistration: false,
+      relatedDocumentSupport: true,
+    });
+    expect(initialize.params.capabilities.workspace.diagnostics.refreshSupport).toBe(true);
   });
 
   it("merges registered capability fragments into the handshake", async () => {
@@ -197,6 +202,84 @@ describe("ServerSession against a fake server", () => {
     const received = await receivedMessages(session);
     const didChange = received.find((message) => message.method === "textDocument/didChange");
     expect(didChange.params.contentChanges).toEqual([{ text: "replaced\n" }]);
+  });
+
+  it("pulls, refreshes, and clears diagnostics for a pull-only server", async () => {
+    const filePath = path.join(tempDir, "diagnostic.js");
+    const uri = require("url").pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, "const broken = ;\n");
+    const diagnostic = {
+      range: {
+        start: { line: 0, character: 15 },
+        end: { line: 0, character: 16 },
+      },
+      severity: 1,
+      message: "Expression expected.",
+    };
+    const session = await startSession({
+      capabilities: { textDocumentSync: 2, diagnosticProvider: { identifier: "fake" } },
+      responseSequences: {
+        "textDocument/diagnostic": [
+          { kind: "full", resultId: "one", items: [diagnostic] },
+          { kind: "unchanged", resultId: "one" },
+          { kind: "full", resultId: "two", items: [] },
+        ],
+      },
+    });
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+
+    await until(() => manager.diagnosticsFor(session, uri).length === 1);
+    let received = await receivedMessages(session);
+    let requests = received.filter((message) => message.method === "textDocument/diagnostic");
+    expect(requests.length).toBe(1);
+    expect(requests[0].params.identifier).toBe("fake");
+
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 997,
+      method: "workspace/diagnostic/refresh",
+    });
+    await until(
+      async () =>
+        (await receivedMessages(session)).filter(
+          (message) => message.method === "textDocument/diagnostic",
+        ).length > 1,
+    );
+    received = await receivedMessages(session);
+    requests = received.filter((message) => message.method === "textDocument/diagnostic");
+    expect(requests.at(-1).params.previousResultId).toBe("one");
+    expect(manager.diagnosticsFor(session, uri)).toEqual([diagnostic]);
+
+    editor.setText("const fixed = true;\n");
+    await until(async () => {
+      const messages = await receivedMessages(session);
+      return messages.filter(({ method }) => method === "textDocument/diagnostic").length > 2;
+    });
+    await until(() => manager.diagnosticsFor(session, uri).length === 0);
+
+    session.detachEditor(editor);
+    expect(manager.diagnosticsFor(session, uri)).toEqual([]);
+  });
+
+  it("does not pull diagnostics while the adapter feature is disabled", async () => {
+    const filePath = path.join(tempDir, "quiet.js");
+    fs.writeFileSync(filePath, "const fine = true;\n");
+    const session = await startSession(
+      {
+        capabilities: { textDocumentSync: 2, diagnosticProvider: {} },
+        responses: {
+          "textDocument/diagnostic": { kind: "full", items: [] },
+        },
+      },
+      { features: { diagnostics: false } },
+    );
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const received = await receivedMessages(session);
+    expect(received.some(({ method }) => method === "textDocument/diagnostic")).toBe(false);
   });
 
   it("transforms synchronized text and switches incremental servers to full changes", async () => {

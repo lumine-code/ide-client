@@ -85,11 +85,11 @@ describe("feature switches", () => {
       expect(featureEnabled(adapter, "hover", stubEditor())).toBe(false);
     });
     it("covers every feature in the vocabulary with a method", () => {
-      // `diagnostics` is pushed and `outline` shares documentSymbol, so neither
-      // is reachable from METHOD_FEATURES; everything else must be.
+      // `outline` shares documentSymbol and its caller names the feature
+      // explicitly; every other feature has a protocol-method mapping.
       const mapped = new Set(Object.values(METHOD_FEATURES));
       const unmapped = FEATURES.filter((feature) => !mapped.has(feature));
-      expect(unmapped).toEqual(["diagnostics", "outline"]);
+      expect(unmapped).toEqual(["outline"]);
     });
   });
 
