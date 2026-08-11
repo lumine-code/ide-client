@@ -126,6 +126,8 @@ Two reasons to hold the session rather than re-pick per request. A reply's `data
 
 Some capabilities the hub advertises on a consumer's behalf, because fragments are merged once at initialize and an external package cannot contribute one: `textDocument.callHierarchy` and `textDocument.typeHierarchy` are both declared for `hierarchy-view`.
 
+The unchecked request API is still a client-capability contract. `ide-client` advertises the generic raw-request routes it implements even when no built-in pane consumes them: document links, document colours, folding ranges, selection ranges, and linked-editing ranges. Keep those capability objects truthful and complete. Servers in the wild sometimes read an optional child such as `textDocument.foldingRange.lineFoldingOnly` without first checking its parent, so an omitted shape can break a valid raw request inside the server.
+
 ## Minimal example
 
 ```js
@@ -168,6 +170,8 @@ The `languageId` sent to the server is resolved in order: `languageIdForScope(sc
 `getSettings` is pushed as `workspace/didChangeConfiguration` after initialize, and re-pushed whenever a config key listed in `settingsKeyPaths` changes. Without `settingsKeyPaths` the settings are sent once and never refreshed.
 
 `handleServerRequest` and `handleServerNotification` cover protocol extensions owned by one server rather than LSP itself. Core client handlers still take precedence; the adapter sees only otherwise-unhandled traffic. Requests must return the JSON-RPC result the server expects, while notifications are also emitted through `session.onNotification` after the adapter observes them.
+
+The core handlers include server-initiated `workspace/workspaceFolders`. Its result is the same current folder list sent during initialize, so a server may query it later without an adapter hook. The client also sends folder-change notifications to sessions that declare support for them.
 
 `transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
 
