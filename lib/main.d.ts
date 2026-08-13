@@ -276,8 +276,63 @@ export interface LanguageServerService {
     fn: (event: { adapterId: string; status: ServerInstallationStatus }) => void,
   ): Disposable;
   applyWorkspaceEdit(edit: object, label?: string): Promise<boolean>;
+  /**
+   * Opens a notebook for language servers: each capable session receives LSP
+   * notebook sync, the cell editors route through every provider, and cell
+   * diagnostics land against the notebook path with 1-based cell numbers.
+   * Resolves to null for a notebook without a path — open again on first save.
+   * The bridge is path-immutable: dispose and reopen on a save-as.
+   */
+  openNotebookDocument(descriptor: NotebookDocumentDescriptor): NotebookBridge | null;
+  /**
+   * The adapters serving an open notebook, for a consumer deciding whether to
+   * stand down. Empty when no bridge is open for the path. Sticky across a
+   * server restart for the bridge's lifetime.
+   */
+  adaptersForNotebook(filePath: string): LanguageServerAdapter[];
+  /** The `vscode-notebook-cell:` URI for a cell of a notebook. */
+  cellUri(notebookPath: string, cellId: string): string;
+  parseCellUri(uri: string): { notebookPath: string; cellId: string } | null;
   openNotebook(session: LanguageServerSession, notebook: object, cells?: object[]): void;
   changeNotebook(session: LanguageServerSession, notebook: object, change: object): void;
   saveNotebook(session: LanguageServerSession, notebook: object): void;
   closeNotebook(session: LanguageServerSession, notebook: object, cells?: object[]): void;
+}
+export interface NotebookCellDescriptor {
+  /** Stable unique id; also the cell URI's fragment. */
+  id: string;
+  kind: "code" | "markup";
+  /**
+   * The live editors showing this cell, one per split view; the first drives
+   * content sync and receives workspace edits. May be absent while a view is
+   * still building — pass the cell again through `updateCells` when it lands.
+   */
+  editors?: TextEditor[];
+  /** Single-editor shorthand for `editors`. */
+  editor?: TextEditor;
+  /** Grammar scope resolving the cell's LSP language id. */
+  scopeName?: string;
+  /** Fallback text for a cell whose editor has not been built yet. */
+  text?: string;
+}
+export interface NotebookDocumentDescriptor {
+  filePath: string;
+  /** Defaults to "jupyter-notebook". */
+  notebookType?: string;
+  /** The notebook's FULL ordered cell list, markup cells included. */
+  cells?: NotebookCellDescriptor[];
+  metadata?: object;
+  /** Reveals a cell for server-initiated navigation; range is cell-relative. */
+  show?(target: { cellId: string; range?: [number, number][]; takeFocus?: boolean }): void;
+}
+export interface NotebookBridge {
+  notebookUri: string;
+  uriForCell(cellId: string): string;
+  /** Resolves when the initial attach pass has finished. */
+  attached: Promise<void>;
+  /** Reconcile to a new full ordered cell list; deltas are computed here. */
+  updateCells(cells: NotebookCellDescriptor[]): Promise<void> | void;
+  /** Forwarded only to servers whose sync options declared save support. */
+  didSave(): void;
+  dispose(): void;
 }

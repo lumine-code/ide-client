@@ -104,7 +104,10 @@ The service you receive:
 | `serverInstallationStatus(adapterId)`                             | What is happening to that server right now, or `null`.                                   |
 | `onDidChangeServerInstallation(fn)`                               | `{ adapterId, status }` as an install proceeds.                                          |
 | `applyWorkspaceEdit(edit, label)`                                 | Applies an LSP `WorkspaceEdit` to the workspace.                                         |
-| `openNotebook`, `changeNotebook`, `saveNotebook`, `closeNotebook` | The notebook document half of LSP.                                                       |
+| `openNotebookDocument(descriptor)`                                | Opens a notebook for language servers; see "Notebook documents" below.                   |
+| `adaptersForNotebook(filePath)`                                   | The adapters serving an open notebook — the stand-down question, notebook-shaped.        |
+| `cellUri(notebookPath, cellId)`, `parseCellUri(uri)`              | The `vscode-notebook-cell:` URI vocabulary, e.g. for configuration scope URIs.           |
+| `openNotebook`, `changeNotebook`, `saveNotebook`, `closeNotebook` | Raw per-session notebook notifications; prefer `openNotebookDocument`.                   |
 
 `opts` for `request` — both optional:
 
@@ -183,6 +186,20 @@ The core handlers include server-initiated `workspace/workspaceFolders`. Its res
 `session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
 
 `transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
+
+## Notebook documents
+
+`openNotebookDocument(descriptor)` teaches the hub a notebook: LSP 3.17 notebook sync, per capable session. The descriptor carries the notebook's `filePath`, its `notebookType` (defaults to `"jupyter-notebook"`), and the **full ordered cell list** — markup cells included, because the 1-based cell numbers diagnostics carry count every cell — each cell with a stable `id`, its `kind`, and its live `editors`. The returned bridge has `updateCells(cells)` for structural changes (the hub computes the LSP deltas), `didSave()`, and `dispose()`; content sync follows each code cell's buffer on its own. The caller of record is `ide-jupyter`, which adapts jupyter-view's document model to this shape — another notebook UI would drive the same bridge.
+
+What follows from an open bridge, with no further wiring:
+
+- Each cell is its own text document under a `vscode-notebook-cell:` URI whose path component is the notebook's, so client and server positions are both cell-relative — identity, no mapping.
+- Only sessions whose server advertises a matching `notebookDocumentSync` ever see the notebook, and only they are asked about cell URIs. A same-grammar server without notebook sync is never consulted for a cell.
+- Cell editors route through every provider — completions, hover, signature, code actions, formatting — exactly like file editors.
+- Cell diagnostics aggregate per notebook and reach the linter against the notebook's path with `cell` numbers, the same shape `linter-ruff`'s CLI route emits; jupyter-view's adapter projects them onto the cells.
+- Workspace edits and `window/showDocument` targets naming cell URIs land in the right cell buffers; the descriptor's `show` callback is how server-initiated navigation reveals a cell.
+
+An untitled notebook cannot open — `openNotebookDocument` returns `null` until the notebook has a path. The bridge is **path-immutable**: on a save-as, dispose it and open a new one, which is also how servers expect a renamed notebook to behave.
 
 A server that exits on its own is restarted on a growing delay, up to `restartLimit` times in a row, and the session is replaced each time — an adapter that holds one has to follow `onDidChangeSession` rather than keep the reference. The limit counts a failure run rather than the life of the window: a server that stays up for a minute has its restarts back, and one that dies on every start reaches the limit and is reported to the user with a way into its log. A restart somebody asked for, through `restart(session)` or the server list, starts a new run. A server that fails its very first start is reported once and not retried, since nothing about it has worked yet.
 

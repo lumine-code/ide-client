@@ -300,4 +300,20 @@ describe("NotebookDocuments against a fake server", () => {
   it("skips untitled notebooks until they have a path", () => {
     expect(notebooks.open({ filePath: null, cells: [] })).toBeNull();
   });
+
+  it("answers the stand-down question with the adapters serving the notebook", async () => {
+    const adapter = registerFakeAdapter({
+      capabilities: { notebookDocumentSync: RUFF_SYNC },
+    });
+    expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([]);
+    const a = buildCellEditor("a\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+    });
+    await bridge.attached;
+    expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([adapter]);
+    bridge.dispose();
+    expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([]);
+  });
 });
