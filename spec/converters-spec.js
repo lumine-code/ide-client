@@ -48,6 +48,35 @@ describe("ide-client converters", () => {
       const key = C.uriKey("file:///C:/Project/File.py");
       expect(C.uriKey(key)).toBe(key);
     });
+    it("agrees across the spellings a server may choose for a cell URI", () => {
+      // Cell URIs are re-spelled the same way file URIs are: the key is
+      // rebuilt from the decoded notebook path plus the fragment.
+      const client = "vscode-notebook-cell:///C:/Users/ASILOI%7E1/project/nb.ipynb#cell-1";
+      const server = "vscode-notebook-cell:///c%3A/Users/ASILOI~1/project/nb.ipynb#cell-1";
+      expect(client).not.toBe(server);
+      expect(C.uriKey(client)).toBe(C.uriKey(server));
+      // Different cells of one notebook stay different keys.
+      expect(C.uriKey(`${client.slice(0, -1)}2`)).not.toBe(C.uriKey(client));
+    });
+  });
+
+  describe("cell URIs", () => {
+    it("round trips a notebook path and cell id", () => {
+      const notebookPath = path.resolve("a folder", "note book #1.ipynb");
+      const uri = C.cellUri(notebookPath, "1f3a-b2");
+      expect(uri.startsWith("vscode-notebook-cell:")).toBe(true);
+      expect(C.parseCellUri(uri)).toEqual({ notebookPath, cellId: "1f3a-b2" });
+    });
+    it("declines anything that is not a cell URI", () => {
+      expect(C.parseCellUri("file:///C:/x.ipynb")).toBeNull();
+      expect(C.parseCellUri("vscode-notebook-cell:///C:/x.ipynb")).toBeNull();
+      expect(C.parseCellUri(undefined)).toBeNull();
+    });
+    it("keeps the notebook's own path component so servers can resolve it", () => {
+      const notebookPath = path.resolve("proj", "nb.ipynb");
+      const fileHalf = C.pathToUri(notebookPath).slice("file:".length);
+      expect(C.cellUri(notebookPath, "c1")).toBe(`vscode-notebook-cell:${fileHalf}#c1`);
+    });
   });
 
   it("maps every LSP completion kind, unshifted", () => {
