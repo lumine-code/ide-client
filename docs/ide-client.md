@@ -189,7 +189,7 @@ The core handlers include server-initiated `workspace/workspaceFolders`. Its res
 
 ## Notebook documents
 
-`openNotebookDocument(descriptor)` teaches the hub a notebook: LSP 3.17 notebook sync, per capable session. The descriptor carries the notebook's `filePath`, its `notebookType` (defaults to `"jupyter-notebook"`), and the **full ordered cell list** — markup cells included, because the 1-based cell numbers diagnostics carry count every cell — each cell with a stable `id`, its `kind`, and its live `editors`. The returned bridge has `updateCells(cells)` for structural changes (the hub computes the LSP deltas), `didSave()`, and `dispose()`; content sync follows each code cell's buffer on its own. The caller of record is `ide-jupyter`, which adapts jupyter-view's document model to this shape — another notebook UI would drive the same bridge.
+`openNotebookDocument(descriptor)` teaches the hub a notebook: LSP 3.17 notebook sync, per capable session. The descriptor carries the notebook's `filePath`, its `notebookType` (defaults to `"jupyter-notebook"`), and the **full ordered cell list** — markup cells included, because the 1-based cell numbers diagnostics carry count every cell — each cell with a stable `id`, its `kind`, and its live `editors`. The returned bridge has `updateCells(cells)` for structural changes (the hub computes the LSP deltas), `didSave()`, and `dispose()`; content sync follows each code cell's buffer on its own. The caller of record is `jupyter-view`, whose own bridge adapts its document model to this shape — another notebook UI would drive the same bridge.
 
 What follows from an open bridge, with no further wiring:
 
