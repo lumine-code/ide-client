@@ -301,6 +301,82 @@ describe("NotebookDocuments against a fake server", () => {
     expect(notebooks.open({ filePath: null, cells: [] })).toBeNull();
   });
 
+  it("attaches when the cells arrive after an empty open", async () => {
+    // A restored notebook's document registers before it loads, so the bridge
+    // legitimately opens with no cells; the arrival must do the attaching.
+    registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
+    const bridge = notebooks.open({ filePath: notebookPath, cells: [] });
+    await bridge.attached;
+    expect(manager.allSessions().length).toBe(0);
+
+    const a = buildCellEditor("import os\n");
+    await bridge.updateCells([
+      { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" },
+    ]);
+
+    const opens = await ofMethod("notebookDocument/didOpen");
+    expect(opens.length).toBe(1);
+    expect(opens[0].params.cellTextDocuments[0].text).toBe("import os\n");
+    expect(manager.sessionsForEditor(a)).toEqual([theSession()]);
+  });
+
+  it("hands a late-built editor to the session's cell document", async () => {
+    registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
+    const a = buildCellEditor("a\n");
+    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" };
+    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain.null-grammar" };
+    const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA, cellB] });
+    await bridge.attached;
+    const key = C.uriKey(bridge.uriForCell("c2"));
+    expect(theSession().documents.get(key).editor).toBeNull();
+
+    // etch built the cell's editor after the didOpen shipped the model text.
+    const b = buildCellEditor("b\n");
+    await bridge.updateCells([cellA, { ...cellB, editor: b }]);
+
+    expect(theSession().documents.get(key).editor).toBe(b);
+    // The arrival grounded the server's copy in the buffer.
+    const changes = await ofMethod("notebookDocument/didChange");
+    const grounding = changes.find((message) =>
+      message.params.change.cells?.textContent?.some(
+        (content) => content.document.uri === bridge.uriForCell("c2"),
+      ),
+    );
+    expect(grounding).toBeDefined();
+  });
+
+  it("clears an editor-less cell's routing entry when the cell goes", async () => {
+    registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
+    const a = buildCellEditor("a\n");
+    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" };
+    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain.null-grammar" };
+    const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA, cellB] });
+    await bridge.attached;
+    const key = C.uriKey(bridge.uriForCell("c2"));
+    expect(manager.externalUris.has(key)).toBe(true);
+
+    await bridge.updateCells([cellA]);
+    expect(manager.externalUris.has(key)).toBe(false);
+  });
+
+  it("prunes a dead session's adapter from the stand-down answer", async () => {
+    const adapter = registerFakeAdapter({
+      capabilities: { notebookDocumentSync: RUFF_SYNC },
+    });
+    const a = buildCellEditor("a\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+    });
+    await bridge.attached;
+    expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([adapter]);
+
+    // The server going away takes its diagnostics with it; a CLI route that
+    // stood down for them has to get the notebook back.
+    await manager.stopSession(theSession());
+    expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([]);
+  });
+
   it("answers the stand-down question with the adapters serving the notebook", async () => {
     const adapter = registerFakeAdapter({
       capabilities: { notebookDocumentSync: RUFF_SYNC },
