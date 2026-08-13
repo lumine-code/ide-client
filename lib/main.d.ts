@@ -202,6 +202,12 @@ export interface LanguageServerService {
   restart(session: LanguageServerSession): Promise<LanguageServerSession>;
   stop(session: LanguageServerSession): Promise<void>;
   getLog(adapterId: string): string;
+  /**
+   * Report, once per window, that this adapter could not find its server.
+   * Silent when the package's own `notifyWhenMissing` setting is `false`, which
+   * is what the notification's Never Ask Again button writes.
+   */
+  reportMissingServer(adapterId: string, options?: { description?: string }): object | null;
   /** Fetch and install this adapter's server; reports progress and failure itself. */
   installServer(adapterId: string, options?: { version?: string }): Promise<object>;
   /** Install the newest release, or resolve unchanged when already current. */

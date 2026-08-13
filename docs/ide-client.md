@@ -94,6 +94,7 @@ The service you receive:
 | `featureEnabled(adapter, feature, editor?)`                       | Whether that feature is on for that adapter, in that editor's scope.                     |
 | `onDidLog(fn)`, `getLog(adapterId)`                               | Server stderr and protocol log.                                                          |
 | `restart(session)`, `stop(session)`                               | Lifecycle control.                                                                       |
+| `reportMissingServer(adapterId, opts?)`                           | Says once per window that the server was not found; honours the package's opt-out.       |
 | `installServer(adapterId, opts?)`                                 | Fetches and installs the server; reports its own progress and failure.                   |
 | `updateServer(adapterId)`                                         | Installs the newest release, or resolves unchanged when already current.                 |
 | `uninstallServer(adapterId)`                                      | Removes the managed copy only.                                                           |
@@ -230,6 +231,32 @@ Four things are worth knowing before writing a descriptor:
 Descriptors are validated at `registerAdapter`, not at install time, so a typo surfaces when the package activates.
 
 Installing, updating and removing all stop the adapter's sessions first, swap the directory, and re-attach — Windows refuses to replace a running executable, and a server that keeps running through the swap would go on serving from a directory that no longer exists.
+
+### Saying the server is missing
+
+Do not raise the notification yourself. Call `reportMissingServer(adapterId, { description })` from the `resolveServer` branch that returns `null`, and the hub handles the rest:
+
+```js
+if (!launch) {
+  service.reportMissingServer("ide-ruff", { description: "Install Ruff and …" });
+  return null;
+}
+```
+
+It fires **once per window per adapter**, adds an **Install** button when the adapter declares `managedServer`, and always adds **Never Ask Again**. It is a warning, not an error: an adapter with no server is not broken, it simply has nothing to run, and several such packages installed at once otherwise means a stack of red banners for tools the user may never have wanted.
+
+Never Ask Again writes `false` to `<adapter.id>.notifyWhenMissing`, so **declare that setting in your `configSchema`** or the user has no way to turn it back on:
+
+```json
+"notifyWhenMissing": {
+  "title": "Notify When Missing",
+  "description": "Show a notification when the language server cannot be found, offering to install it.",
+  "type": "boolean",
+  "default": true
+}
+```
+
+The once-per-window flag is cleared as soon as a session for that adapter starts, so a server that is removed later is reported again rather than staying silent.
 
 ## Features
 

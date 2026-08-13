@@ -33,6 +33,89 @@ describe("ide-client package", () => {
     expect(typeof service.applyWorkspaceEdit).toBe("function");
   });
 
+  describe("reporting a missing server", () => {
+    const adapterFor = (managedServer) => ({
+      id: "ide-missing",
+      displayName: "Missing Language Server",
+      grammarScopes: ["source.missing"],
+      resolveServer: async () => null,
+      managedServer,
+    });
+    const descriptor = {
+      source: "github-release",
+      displayName: "Missingtool",
+      repository: "example/missingtool",
+      assetFor: () => null,
+      checksum: "none",
+      binary: "missingtool",
+    };
+    let main, service;
+
+    beforeEach(() => {
+      main = lumine.packages.getActivePackage("ide-client").mainModule;
+      service = main.provideIdeClient();
+      lumine.notifications.clear();
+    });
+
+    it("warns rather than errors, since an adapter with no server is not broken", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      const notification = service.reportMissingServer("ide-missing", { description: "why" });
+      expect(notification.getType()).toBe("warning");
+      expect(notification.getMessage()).toBe("Unable to find Missingtool");
+    });
+
+    it("says it once per window however many editors ask", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      service.reportMissingServer("ide-missing");
+      expect(service.reportMissingServer("ide-missing")).toBe(null);
+      expect(lumine.notifications.getNotifications().length).toBe(1);
+    });
+
+    it("offers Install only when the adapter says where to get the server", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      const withSource = service.reportMissingServer("ide-missing");
+      expect(withSource.getOptions().buttons.map(({ text }) => text)).toEqual([
+        "Install Missingtool",
+        "Never Ask Again",
+      ]);
+    });
+
+    it("offers only the opt-out when there is nowhere to install from", () => {
+      service.registerAdapter(adapterFor(undefined));
+      const notification = service.reportMissingServer("ide-missing");
+      expect(notification.getOptions().buttons.map(({ text }) => text)).toEqual([
+        "Never Ask Again",
+      ]);
+    });
+
+    it("stays silent once Never Ask Again has been pressed", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      const notification = service.reportMissingServer("ide-missing");
+      notification.getOptions().buttons.at(-1).onDidClick();
+      // Written to the package's settings, so it survives a reload and can be
+      // undone on the page it belongs to.
+      expect(lumine.config.get("ide-missing.notifyWhenMissing")).toBe(false);
+
+      main.missingReported.clear();
+      expect(service.reportMissingServer("ide-missing")).toBe(null);
+      lumine.config.unset("ide-missing.notifyWhenMissing");
+    });
+
+    it("is armed again once a session for that adapter starts", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      service.reportMissingServer("ide-missing");
+      expect(main.missingReported.has("ide-missing")).toBe(true);
+      // A session exists only because resolveServer found something, so a
+      // server removed later is reported once more rather than staying silent.
+      main.manager.didChangeSession({ adapter: { id: "ide-missing" }, state: "starting" });
+      expect(main.missingReported.has("ide-missing")).toBe(false);
+    });
+
+    it("ignores an adapter that is not registered", () => {
+      expect(service.reportMissingServer("ide-not-registered")).toBe(null);
+    });
+  });
+
   it("registers its workspace commands", () => {
     const commands = lumine.commands.findCommands({
       target: lumine.views.getView(lumine.workspace),
