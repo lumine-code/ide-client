@@ -238,6 +238,78 @@ describe("ide-client package", () => {
     registration.dispose();
   });
 
+  it("aggregates cell diagnostics per notebook and evicts cell by cell", () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    const C = require("../lib/converters");
+    const delegate = {
+      batches: [],
+      setMessages(filePath, messages) {
+        this.batches.push({ filePath, messages });
+      },
+      dispose() {},
+    };
+    const registration = main.consumeLinterRegistry(() => delegate);
+    const notebookPath = require("path").resolve("proj", "nb.ipynb");
+    // Cell c2 sits at index 2 — a markdown cell between them — so the linter
+    // cell numbers are full-list based, not code-cell based.
+    const record = {
+      filePath: notebookPath,
+      notebookType: "jupyter-notebook",
+      cellIndexOf: (id) => ({ c1: 0, c2: 2 })[id] ?? -1,
+    };
+    const editorA = { getRootScopeDescriptor: () => null };
+    const editorB = { getRootScopeDescriptor: () => null };
+    main.manager.registerExternalDocument(editorA, {
+      editor: editorA,
+      uri: C.cellUri(notebookPath, "c1"),
+      cellId: "c1",
+      record,
+    });
+    main.manager.registerExternalDocument(editorB, {
+      editor: editorB,
+      uri: C.cellUri(notebookPath, "c2"),
+      cellId: "c2",
+      record,
+    });
+    const diagnostic = (message) => ({
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      severity: 1,
+      message,
+    });
+    const session = { adapter: { id: "fake-adapter", displayName: "Fake" } };
+
+    main.manager.publishDiagnostics(session, {
+      uri: C.cellUri(notebookPath, "c1"),
+      diagnostics: [diagnostic("one")],
+    });
+    main.manager.publishDiagnostics(session, {
+      uri: C.cellUri(notebookPath, "c2"),
+      diagnostics: [diagnostic("two")],
+    });
+    // One batch per publish, each carrying the WHOLE notebook: the delegate
+    // replaces a file's bucket, so per-cell batches would erase each other.
+    const combined = delegate.batches[delegate.batches.length - 1];
+    expect(combined.filePath).toBe(notebookPath);
+    expect(combined.messages.length).toBe(2);
+    expect(combined.messages.map((m) => m.location.cell).sort()).toEqual([1, 3]);
+    expect(combined.messages.every((m) => m.location.file === notebookPath)).toBe(true);
+    expect(combined.messages.every((m) => m.location.buffer === undefined)).toBe(true);
+
+    // An empty publish evicts that cell and keeps the rest.
+    main.manager.publishDiagnostics(session, {
+      uri: C.cellUri(notebookPath, "c1"),
+      diagnostics: [],
+    });
+    const after = delegate.batches[delegate.batches.length - 1];
+    expect(after.filePath).toBe(notebookPath);
+    expect(after.messages.length).toBe(1);
+    expect(after.messages[0].location.cell).toBe(3);
+
+    main.manager.unregisterExternalDocument(editorA);
+    main.manager.unregisterExternalDocument(editorB);
+    registration.dispose();
+  });
+
   it("says why a server that keeps dying has stopped, and offers its log", async () => {
     // The whole point is that the reason is in the log and nothing said to look
     // there, so the notification is only useful if it carries the way in.

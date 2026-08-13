@@ -1,6 +1,6 @@
 const path = require("path");
 const C = require("../lib/converters");
-const { toLinterMessages } = require("../lib/linter-messages");
+const { toLinterMessages, toNotebookLinterMessages } = require("../lib/linter-messages");
 
 describe("LSP diagnostics linter mapping", () => {
   it("maps diagnostics to linter.registry messages", () => {
@@ -116,6 +116,46 @@ describe("LSP diagnostics linter mapping", () => {
     it("drops a URI that belongs to no file rather than inventing one", () => {
       expect(toLinterMessages("untitled:Untitled-1", []).filePath).toBeNull();
       expect(toLinterMessages(undefined, []).filePath).toBeNull();
+    });
+
+    // Cell diagnostics come through their own conversion — the generic one
+    // must not resolve a cell URI to a path it does not have.
+    it("drops a cell URI on the generic path", () => {
+      const uri = C.cellUri(path.resolve("proj", "nb.ipynb"), "c1");
+      expect(toLinterMessages(uri, []).filePath).toBeNull();
+    });
+  });
+
+  describe("notebook cell messages", () => {
+    it("lands on the notebook with a full-list 1-based cell and cell-relative position", () => {
+      const notebookPath = path.resolve("proj", "nb.ipynb");
+      const { filePath, messages } = toNotebookLinterMessages({ notebookPath, cellIndex: 2 }, [
+        {
+          range: { start: { line: 1, character: 4 }, end: { line: 1, character: 9 } },
+          severity: 2,
+          message: "unused",
+          source: "ruff",
+          code: "F401",
+        },
+      ]);
+      expect(filePath).toBe(notebookPath);
+      expect(messages[0]).toEqual(
+        jasmine.objectContaining({
+          severity: "warning",
+          excerpt: "unused",
+          description: "ruff: F401",
+          location: {
+            file: notebookPath,
+            cell: 3,
+            position: [
+              [1, 4],
+              [1, 9],
+            ],
+          },
+        }),
+      );
+      // Deliberately no buffer: split views give one cell different buffers.
+      expect(messages[0].location.buffer).toBeUndefined();
     });
   });
 });
