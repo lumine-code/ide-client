@@ -359,6 +359,69 @@ describe("NotebookDocuments against a fake server", () => {
     expect(manager.externalUris.has(key)).toBe(false);
   });
 
+  it("accepts cell diagnostics stamped with either the cell or the notebook version", async () => {
+    // Servers disagree on which counter a cell publish carries: basedpyright
+    // stamps the cell text document's version, ruff the notebook document's.
+    // Insisting on the cell's dropped every ruff cell publish as stale.
+    registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
+    const a = buildCellEditor("import os\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+    });
+    await bridge.attached;
+    const record = [...notebooks.records][0];
+    const session = theSession();
+    const uri = bridge.uriForCell("c1");
+    const diagnostic = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 9 } },
+      message: "unused",
+    };
+
+    manager.publishDiagnostics(session, {
+      uri,
+      version: record.version,
+      diagnostics: [diagnostic],
+    });
+    expect(manager.diagnosticsFor(session, uri).length).toBe(1);
+
+    manager.publishDiagnostics(session, {
+      uri,
+      version: record.cellVersion("c1"),
+      diagnostics: [diagnostic, diagnostic],
+    });
+    expect(manager.diagnosticsFor(session, uri).length).toBe(2);
+
+    // A version that is neither counter is still stale and still dropped.
+    manager.publishDiagnostics(session, { uri, version: 999, diagnostics: [] });
+    expect(manager.diagnosticsFor(session, uri).length).toBe(2);
+  });
+
+  it("never pulls diagnostics for notebook cells", async () => {
+    // Cell diagnostics ride the notebook push channel. A server that also
+    // offers pull can answer a cell pull with an empty full report that
+    // contradicts its own pushes — ruff does exactly that, which wiped the
+    // cell's messages the moment typing paused.
+    registerFakeAdapter({
+      capabilities: {
+        notebookDocumentSync: RUFF_SYNC,
+        diagnosticProvider: { identifier: "fake" },
+      },
+    });
+    const a = buildCellEditor("import os\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+    });
+    await bridge.attached;
+
+    a.getBuffer().append("x = 1\n");
+    await until(async () => (await ofMethod("notebookDocument/didChange")).length > 0);
+    // Past the pull debounce: the change synced, and no pull followed it.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(await ofMethod("textDocument/diagnostic")).toEqual([]);
+  });
+
   it("prunes a dead session's adapter from the stand-down answer", async () => {
     const adapter = registerFakeAdapter({
       capabilities: { notebookDocumentSync: RUFF_SYNC },
