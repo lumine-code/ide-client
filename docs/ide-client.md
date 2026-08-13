@@ -58,6 +58,8 @@ interface LanguageServerAdapter {
   ): void;
   features?: Partial<Record<LanguageServerFeature, boolean>>;
   managedServer?: ManagedServerDescriptor;
+  installServer?(context: ServerInstallContext): Promise<AdapterInstallResult>;
+  latestServerVersion?(api: InstallApi): Promise<string | null>;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   restoreDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   transformServerCapabilities?(caps: Record<string, unknown>): Record<string, unknown>;
@@ -99,6 +101,8 @@ The service you receive:
 | `updateServer(adapterId)`                                         | Installs the newest release, or resolves unchanged when already current.                 |
 | `uninstallServer(adapterId)`                                      | Removes the managed copy only.                                                           |
 | `managedServer(adapterId)`                                        | The installed copy, or `null`.                                                           |
+| `serverInstallationStatus(adapterId)`                             | What is happening to that server right now, or `null`.                                   |
+| `onDidChangeServerInstallation(fn)`                               | `{ adapterId, status }` as an install proceeds.                                          |
 | `applyWorkspaceEdit(edit, label)`                                 | Applies an LSP `WorkspaceEdit` to the workspace.                                         |
 | `openNotebook`, `changeNotebook`, `saveNotebook`, `closeNotebook` | The notebook document half of LSP.                                                       |
 
@@ -231,6 +235,42 @@ Four things are worth knowing before writing a descriptor:
 Descriptors are validated at `registerAdapter`, not at install time, so a typo surfaces when the package activates.
 
 Installing, updating and removing all stop the adapter's sessions first, swap the directory, and re-attach — Windows refuses to replace a running executable, and a server that keeps running through the swap would go on serving from a directory that no longer exists.
+
+### Fetching your own server
+
+A descriptor only describes the shapes it was designed for. An adapter whose server does not fit one — several binaries rather than a server, a release layout nobody anticipated — implements `installServer` instead and uses the primitives the hub hands it. This is the model Zed's extension API uses, and the names mirror it deliberately.
+
+```js
+async installServer({ storagePath, api }) {
+  api.setServerInstallationStatus("downloading");
+  const release = await api.latestGithubRelease("owner/tool");
+  const asset = release.assets.find((a) => a.name === assetForThisPlatform());
+  await api.downloadFile(asset.url, storagePath, { type: "gzip-tar" });
+  await api.makeFileExecutable(`${storagePath}/tool`);
+  return { version: release.version, binary: "tool" };
+}
+```
+
+Fill `storagePath` and return `{ version, binary }` or `{ version, module }` naming what to launch, relative to the install directory. Everything else is unchanged: the hub stages, swaps atomically, rolls back on failure, writes the same `install.json`, stops and restarts sessions in the same order, and reports the same status. It is the descriptor path without the descriptor.
+
+| primitive                                         |                                                                                                       |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `latestGithubRelease(repository, { preRelease })` | `{ version, tag, assets: [{ name, url, size }] }`; throws with the status rather than resolving empty |
+| `githubReleaseByTag(repository, tag)`             | the same shape                                                                                        |
+| `npmPackageLatestVersion(name)`                   |                                                                                                       |
+| `npmPackageInstalledVersion(name, directory)`     | `null` when absent                                                                                    |
+| `npmInstallPackage(name, version, directory)`     | installs the package and its tree; `--omit=dev --ignore-scripts`                                      |
+| `downloadFile(url, destination, { type })`        | `type` ∈ `uncompressed` \| `gzip` \| `gzip-tar` \| `zip`                                              |
+| `makeFileExecutable(path)`                        | no-op on Windows                                                                                      |
+| `setServerInstallationStatus(status)`             | `checking` \| `downloading` \| `installing` \| `failed` \| `null`                                     |
+
+Two things to know. **`managedServer` and `installServer` are mutually exclusive** — declaring both leaves it ambiguous which one fills the staging directory, and is rejected at `registerAdapter`. And **`downloadFile` does not verify checksums**: the descriptor path verifies every download against what its source publishes, and it cannot force that on a caller, so an adapter reaching for the primitive owns its own verification. Zed has the same gap; stating it is the difference.
+
+Implement `latestServerVersion(api)` as well if the Manage Servers list should have a version to compare against; without it the row simply reports what is installed.
+
+### One status vocabulary
+
+Whatever an adapter does underneath, it reports through `setServerInstallationStatus`, and the hub sets the same states around every install it runs. That is deliberately the only place uniformity is enforced: the Manage Servers rows and the busy indicator read the status, never the mechanism. A user should never learn that one server arrives as a GitHub asset and another as an npm tree.
 
 ### Saying the server is missing
 

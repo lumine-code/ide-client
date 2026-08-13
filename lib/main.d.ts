@@ -21,6 +21,51 @@ export interface ServerResolutionContext {
   /** The copy the editor installed for this adapter, or null when there is none. */
   managedServer: ManagedServerInstall | null;
 }
+export type ServerInstallationStatus = "checking" | "downloading" | "installing" | "failed" | null;
+export type DownloadedFileType = "uncompressed" | "gzip" | "gzip-tar" | "zip";
+export interface GithubRelease {
+  version: string;
+  tag: string;
+  assets: Array<{ name: string; url: string; size: number }>;
+}
+/**
+ * The capabilities an adapter uses to fetch its own server. Named after
+ * `zed_extension_api`, and handed to `installServer` rather than imported.
+ *
+ * `downloadFile` cannot verify a checksum for you — an adapter using it owns
+ * that, unlike the descriptor path where verification is mandatory.
+ */
+export interface InstallApi {
+  latestGithubRelease(
+    repository: string,
+    options?: { preRelease?: boolean },
+  ): Promise<GithubRelease>;
+  githubReleaseByTag(repository: string, tag: string): Promise<GithubRelease>;
+  npmPackageLatestVersion(name: string): Promise<string>;
+  npmPackageInstalledVersion(name: string, directory: string): string | null;
+  npmInstallPackage(name: string, version: string, directory: string): Promise<void>;
+  downloadFile(
+    url: string,
+    destination: string,
+    options?: { type?: DownloadedFileType },
+  ): Promise<string>;
+  makeFileExecutable(path: string): Promise<void>;
+  setServerInstallationStatus(status: ServerInstallationStatus): void;
+}
+export interface ServerInstallContext {
+  /** The staging directory to fill; it becomes the install directory. */
+  storagePath: string;
+  version: string | null;
+  api: InstallApi;
+  adapter: LanguageServerAdapter;
+}
+export interface AdapterInstallResult {
+  version?: string;
+  /** Executable to launch, relative to the install directory. */
+  binary?: string;
+  /** Entry module to launch, relative to the install directory. */
+  module?: string;
+}
 export interface ManagedServerInstall {
   version: string;
   source: "github-release" | "npm";
@@ -99,6 +144,16 @@ export interface LanguageServerAdapter {
   resolveServer(context: ServerResolutionContext): Promise<ServerLaunch | null>;
   /** Opt in to the editor installing, updating and removing this server. */
   managedServer?: ManagedServerDescriptor;
+  /**
+   * Fetch the server yourself, for a shape no descriptor models — several
+   * binaries, an unusual release layout. Mutually exclusive with
+   * `managedServer`; declaring both is rejected at registration. Fill
+   * `storagePath` and return where to launch from; the hub stages, swaps,
+   * records and reports around you exactly as it does for a descriptor.
+   */
+  installServer?(context: ServerInstallContext): Promise<AdapterInstallResult>;
+  /** The version the list should compare against, when you fetch your own. */
+  latestServerVersion?(api: InstallApi): Promise<string | null>;
   getInitializationOptions?(context: {
     rootPath: string;
     rootUri: string;
@@ -215,6 +270,11 @@ export interface LanguageServerService {
   /** Remove only the managed copy; a PATH or bundled server is left alone. */
   uninstallServer(adapterId: string): Promise<void>;
   managedServer(adapterId: string): ManagedServerInstall | null;
+  /** What is happening to that adapter's server right now, or null. */
+  serverInstallationStatus(adapterId: string): ServerInstallationStatus;
+  onDidChangeServerInstallation(
+    fn: (event: { adapterId: string; status: ServerInstallationStatus }) => void,
+  ): Disposable;
   applyWorkspaceEdit(edit: object, label?: string): Promise<boolean>;
   openNotebook(session: LanguageServerSession, notebook: object, cells?: object[]): void;
   changeNotebook(session: LanguageServerSession, notebook: object, change: object): void;
