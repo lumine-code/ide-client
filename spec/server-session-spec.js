@@ -612,4 +612,77 @@ describe("ServerSession against a fake server", () => {
     // Reported into the server's log, not thrown at the renderer.
     expect(manager.getLog("fake")).toContain("Could not deliver exit");
   });
+
+  describe("notebook documents", () => {
+    const C = require("../lib/converters");
+
+    it("forwards the notebook lifecycle notifications verbatim", async () => {
+      const session = await startSession();
+      const notebook = { uri: "file:///C:/proj/nb.ipynb", notebookType: "jupyter-notebook" };
+      const cells = [{ uri: "vscode-notebook-cell:///C:/proj/nb.ipynb#c1", languageId: "python" }];
+
+      session.openNotebook({ ...notebook, version: 1, cells: [] }, cells);
+      session.changeNotebook(
+        { uri: notebook.uri, version: 2 },
+        { cells: { textContent: [] } },
+      );
+      session.saveNotebook({ uri: notebook.uri });
+      session.closeNotebook({ uri: notebook.uri }, [{ uri: cells[0].uri }]);
+
+      const received = await receivedMessages(session);
+      const methods = received.map((message) => message.method);
+      expect(methods).toContain("notebookDocument/didOpen");
+      expect(methods).toContain("notebookDocument/didChange");
+      expect(methods).toContain("notebookDocument/didSave");
+      expect(methods).toContain("notebookDocument/didClose");
+      const open = received.find((message) => message.method === "notebookDocument/didOpen");
+      expect(open.params.notebookDocument.notebookType).toBe("jupyter-notebook");
+      expect(open.params.cellTextDocuments).toEqual(cells);
+      const change = received.find((message) => message.method === "notebookDocument/didChange");
+      expect(change.params.notebookDocument.version).toBe(2);
+
+      await session.stop();
+      // After stop the notify is a quiet no-op, never a throw.
+      expect(() => session.saveNotebook({ uri: notebook.uri })).not.toThrow();
+    });
+
+    it("adopts a cell as a document without ever opening it as a text document", async () => {
+      const session = await startSession();
+      const record = { cellVersion: () => 7 };
+      const editor = { getRootScopeDescriptor: () => null };
+      const uri = C.cellUri("C:\\proj\\nb.ipynb", "c1");
+
+      session.adoptNotebookCell({ record, cellId: "c1", editor, uri });
+
+      const document = session.documents.get(C.uriKey(uri));
+      expect(document).toBeDefined();
+      expect(document.version).toBe(7);
+      const received = await receivedMessages(session);
+      expect(
+        received.some(
+          (message) =>
+            message.method === "textDocument/didOpen" &&
+            message.params.textDocument.uri.startsWith("vscode-notebook-cell:"),
+        ),
+      ).toBe(false);
+
+      // detachEditor must not route a notebook cell through textDocument/didClose.
+      session.detachEditor(editor);
+      expect(session.documents.get(C.uriKey(uri))).toBe(document);
+
+      const published = [];
+      const subscription = manager.onDidPublishDiagnostics((params) => published.push(params));
+      spyOn(manager, "didCloseDocument").and.callThrough();
+      session.releaseNotebookCell(uri);
+
+      expect(session.documents.has(C.uriKey(uri))).toBe(false);
+      expect(published.length).toBe(1);
+      expect(published[0].uri).toBe(uri);
+      expect(published[0].diagnostics).toEqual([]);
+      expect(manager.didCloseDocument).toHaveBeenCalledWith(session);
+      const received2 = await receivedMessages(session);
+      expect(received2.some((message) => message.method === "textDocument/didClose")).toBe(false);
+      subscription.dispose();
+    });
+  });
 });
