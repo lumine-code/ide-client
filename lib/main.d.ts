@@ -113,6 +113,16 @@ export interface DocumentTextContext {
   editor: TextEditor;
   uri: string;
 }
+/** An LSP diagnostic, as the server sent it. */
+export interface Diagnostic {
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  message: string;
+  severity?: number;
+  code?: string | number;
+  source?: string;
+  tags?: number[];
+  [key: string]: unknown;
+}
 /** A capability an adapter can switch off for its own server. */
 export type LanguageServerFeature =
   | "diagnostics"
@@ -185,6 +195,11 @@ export interface LanguageServerAdapter {
   transformDocumentText?(text: string, context: DocumentTextContext): string;
   /** Restore transformed text in formatting and workspace edits from the server. */
   restoreDocumentText?(text: string, context: DocumentTextContext): string;
+  /** Filter or rewrite what the server reported, before anything else sees it. */
+  transformDiagnostics?(
+    diagnostics: Diagnostic[],
+    context: { editor?: TextEditor; uri: string; session: LanguageServerSession },
+  ): Diagnostic[];
   transformServerCapabilities?(capabilities: Record<string, unknown>): Record<string, unknown>;
 }
 export interface RequestOptions {

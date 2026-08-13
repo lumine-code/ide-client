@@ -419,6 +419,39 @@ describe("ServerSession against a fake server", () => {
     expect(editor.getText()).toBe("secret\n");
   });
 
+  it("hands a pulled diagnostic report to the adapter with the editor it belongs to", async () => {
+    const filePath = path.join(tempDir, "filtered.js");
+    fs.writeFileSync(filePath, "one\n");
+    const contexts = [];
+    const session = await startSession(
+      {
+        capabilities: { textDocumentSync: 2, diagnosticProvider: {} },
+        responses: {
+          "textDocument/diagnostic": {
+            kind: "full",
+            items: [{ message: "dropped", code: 521 }, { message: "kept" }],
+          },
+        },
+      },
+      {
+        transformDiagnostics: (diagnostics, context) => {
+          contexts.push(context);
+          return diagnostics.filter(({ code }) => code !== 521);
+        },
+      },
+    );
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(manager.diagnosticsFor(session, session.documents.values().next().value.uri)).toEqual([
+      { message: "kept" },
+    ]);
+    expect(contexts[0].editor).toBe(editor);
+    expect(contexts[0].session).toBe(session);
+    expect(contexts[0].uri).toContain("filtered.js");
+  });
+
   it("routes $/progress to the busy provider", async () => {
     const busy = {
       added: [],

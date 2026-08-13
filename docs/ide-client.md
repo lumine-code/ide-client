@@ -62,6 +62,10 @@ interface LanguageServerAdapter {
   latestServerVersion?(api: InstallApi): Promise<string | null>;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
   restoreDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
+  transformDiagnostics?(
+    diagnostics: Diagnostic[],
+    context: { editor?: TextEditor; uri: string; session: LanguageServerSession },
+  ): Diagnostic[];
   transformServerCapabilities?(caps: Record<string, unknown>): Record<string, unknown>;
 }
 ```
@@ -182,6 +186,8 @@ The `languageId` sent to the server is resolved in order: `languageIdForScope(sc
 The core handlers include server-initiated `workspace/workspaceFolders`. Its result is the same current folder list sent during initialize, so a server may query it later without an adapter hook. The client also sends folder-change notifications to sessions that declare support for them.
 
 `transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
+
+`transformDiagnostics` is the adapter's last word on what its server reported, for the diagnostic a server insists on and its own users do not want — `ide-json` drops "Comments are not permitted in JSON" with it. Every route arrives at the same funnel, push notifications and pulled reports alike, so what it returns is what is stored, emitted, counted and handed to a code-action request as context; there is no unfiltered copy behind it. Returning the array unchanged is free. Prefer it over `transformDocumentText` whenever the goal is what the server _says_ rather than what it _sees_: hiding text costs a reversal in every edit that comes back, and one that survives a reformat is rarely writable.
 
 `session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
 

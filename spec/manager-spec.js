@@ -818,6 +818,41 @@ describe("LanguageServerManager diagnostics", () => {
 
     expect(published).toEqual([fromServer, fromServer]);
   });
+
+  it("lets the adapter have the last word on what its server reported", () => {
+    // ide-json drops "Comments are not permitted in JSON" this way, rather than
+    // hiding the comments from the server and having to put them back into
+    // every edit that comes home.
+    const seen = [];
+    const filtered = {
+      ...session,
+      transformDiagnostics: (diagnostics, publishedUri, document) => {
+        seen.push({ uri: publishedUri, version: document?.version });
+        return diagnostics.filter(({ code }) => code !== 521);
+      },
+    };
+    const published = [];
+    manager.onDidPublishDiagnostics((event) => published.push(event.diagnostics));
+
+    manager.publishDiagnostics(filtered, {
+      uri,
+      version: 4,
+      diagnostics: [{ message: "Comments are not permitted in JSON.", code: 521 }, { code: 519 }],
+    });
+
+    // Stored, emitted and counted all read the filtered list: nothing keeps an
+    // unfiltered copy that a consumer could reach instead.
+    expect(manager.diagnosticsFor(filtered, uri)).toEqual([{ code: 519 }]);
+    expect(published).toEqual([[{ code: 519 }]]);
+    expect(manager.diagnosticCountFor(filtered)).toEqual({ total: 1, files: 1 });
+    expect(seen).toEqual([{ uri, version: 4 }]);
+  });
+
+  it("publishes what the server sent when no adapter filters it", () => {
+    const untouched = { ...session, transformDiagnostics: () => undefined };
+    manager.publishDiagnostics(untouched, { uri, version: 4, diagnostics: [{ code: 519 }] });
+    expect(manager.diagnosticsFor(untouched, uri)).toEqual([{ code: 519 }]);
+  });
 });
 
 describe("LanguageServerManager restart", () => {
