@@ -8,6 +8,8 @@ const stubEditor = {
   getGrammar: () => ({ scopeName: "source.js", name: "JavaScript" }),
 };
 
+const C = require("../lib/converters");
+
 const managerWith = (...args) => {
   const sessions = args.filter(Boolean);
   return {
@@ -20,6 +22,14 @@ const managerWith = (...args) => {
     sessions: new Map(sessions.map((session, index) => [`key-${index}`, session])),
     allSessions() {
       return [...new Set(this.sessions.values())];
+    },
+    uriForEditor: (editor) => {
+      const editorPath = editor.getPath?.();
+      return editorPath ? C.pathToUri(editorPath) : null;
+    },
+    resolveUri: (uri) => {
+      const resolvedPath = C.uriToPath(uri);
+      return resolvedPath ? { kind: "file", path: resolvedPath } : null;
     },
   };
 };

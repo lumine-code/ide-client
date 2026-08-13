@@ -31,6 +31,10 @@ const sessionWith = (respond, capabilities = { completionProvider: {} }) => ({
 
 const managerWith = (...sessions) => ({
   addCapabilityFragment() {},
+  uriForEditor: (editor) => {
+    const editorPath = editor.getPath?.();
+    return editorPath ? require("../lib/converters").pathToUri(editorPath) : null;
+  },
   allGrammarScopes: () => ["source.ts"],
   activeSessionsForEditor: async () => sessions.filter(Boolean),
   activeSessionForEditor: async () => sessions[0] || null,

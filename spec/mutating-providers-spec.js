@@ -15,6 +15,8 @@ const stubEditor = (lines = ["const value = 1;"]) => ({
   getBuffer: () => ({ lineForRow: (row) => lines[row] }),
 });
 
+const C = require("../lib/converters");
+
 const managerWith = (...args) => {
   const extras = args.length && !isSessionLike(args[args.length - 1]) ? args.pop() : {};
   const sessions = args.filter(Boolean);
@@ -30,6 +32,14 @@ const managerWith = (...args) => {
     diagnostics: new Map(),
     diagnosticsFor: () => [],
     applyWorkspaceEdit: async () => true,
+    uriForEditor: (editor) => {
+      const editorPath = editor.getPath?.();
+      return editorPath ? C.pathToUri(editorPath) : null;
+    },
+    resolveUri: (uri) => {
+      const resolvedPath = C.uriToPath(uri);
+      return resolvedPath ? { kind: "file", path: resolvedPath } : null;
+    },
     ...extras,
   };
 };

@@ -40,6 +40,14 @@ const sessionFor = (adapter, capabilities, result) => {
 
 const managerWith = (...sessions) => ({
   addCapabilityFragment() {},
+  uriForEditor: (editor) => {
+    const editorPath = editor.getPath?.();
+    return editorPath ? require("../lib/converters").pathToUri(editorPath) : null;
+  },
+  resolveUri: (uri) => {
+    const resolvedPath = require("../lib/converters").uriToPath(uri);
+    return resolvedPath ? { kind: "file", path: resolvedPath } : null;
+  },
   allGrammarScopes: () => ["source.js"],
   activeSessionsForEditor: async () => sessions,
   activeSessionForFeature: async (editor, method, feature) =>

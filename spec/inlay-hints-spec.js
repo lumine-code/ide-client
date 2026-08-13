@@ -21,6 +21,10 @@ const makeManager = (session) => {
   const emitter = new Emitter();
   return {
     addCapabilityFragment() {},
+    uriForEditor: (editor) => {
+      const editorPath = editor.getPath?.();
+      return editorPath ? require("../lib/converters").pathToUri(editorPath) : null;
+    },
     activeSessionForEditor: async () => session,
     activeSessionsForEditor: async () => (session ? [session] : []),
     activeSessionForFeature: async () => session,
