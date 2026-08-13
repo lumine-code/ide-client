@@ -58,6 +58,169 @@ describe("LanguageServerManager adapters", () => {
   });
 });
 
+describe("LanguageServerManager external documents", () => {
+  let manager;
+  const notebookPath = path.resolve("proj", "nb.ipynb");
+  const record = () => ({
+    filePath: notebookPath,
+    notebookType: "jupyter-notebook",
+    cellIndexOf: (cellId) => (cellId === "c1" ? 0 : -1),
+  });
+  const cellEditor = () => ({
+    getGrammar: () => ({ scopeName: "source.python" }),
+    getPath: () => null,
+    getRootScopeDescriptor: () => null,
+  });
+
+  beforeEach(() => {
+    manager = new LanguageServerManager();
+  });
+  afterEach(async () => manager.deactivate());
+
+  it("routes a bound editor to its cell URI and back", () => {
+    const editor = cellEditor();
+    const uri = C.cellUri(notebookPath, "c1");
+    manager.registerExternalDocument(editor, { editor, uri, cellId: "c1", record: record() });
+
+    expect(manager.uriForEditor(editor)).toBe(uri);
+    const resolved = manager.resolveUri(uri);
+    expect(resolved.kind).toBe("cell");
+    expect(resolved.editor).toBe(editor);
+    expect(resolved.notebookPath).toBe(notebookPath);
+    expect(resolved.cellIndex).toBe(0);
+
+    manager.unregisterExternalDocument(editor);
+    expect(manager.uriForEditor(editor)).toBeNull();
+    expect(manager.resolveUri(uri)).toBeNull();
+  });
+
+  it("resolves file URIs to paths and declines the rest", () => {
+    const filePath = path.resolve("proj", "a.py");
+    expect(manager.resolveUri(C.pathToUri(filePath))).toEqual({ kind: "file", path: filePath });
+    expect(manager.resolveUri("untitled:Untitled-1")).toBeNull();
+  });
+
+  it("hands a plain editor its file URI unchanged", () => {
+    const filePath = path.resolve("proj", "a.py");
+    const editor = { getPath: () => filePath };
+    expect(manager.uriForEditor(editor)).toBe(C.pathToUri(filePath));
+    expect(manager.uriForEditor({ getPath: () => null })).toBeNull();
+  });
+
+  it("asks only sessions that hold the cell document about a cell", () => {
+    // Two same-root servers on one grammar; only the notebook-syncing one saw
+    // the notebook, and the other must never be asked about a cell URI.
+    const adapterA = {
+      id: "with-sync",
+      displayName: "A",
+      grammarScopes: ["source.python"],
+      resolveServer: async () => null,
+    };
+    const adapterB = {
+      id: "without-sync",
+      displayName: "B",
+      grammarScopes: ["source.python"],
+      resolveServer: async () => null,
+    };
+    manager.registerAdapter(adapterA);
+    manager.registerAdapter(adapterB);
+    const root = manager.rootForPath(notebookPath, adapterA);
+    const uri = C.cellUri(notebookPath, "c1");
+    const holding = {
+      adapter: adapterA,
+      rootPath: root,
+      state: "running",
+      documents: new Map([[C.uriKey(uri), {}]]),
+      folders: new Set([root]),
+      stop: async () => {},
+    };
+    const notHolding = {
+      adapter: adapterB,
+      rootPath: root,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([root]),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapterA, root), holding);
+    manager.sessions.set(manager.keyFor(adapterB, root), notHolding);
+
+    const editor = cellEditor();
+    manager.registerExternalDocument(editor, { editor, uri, cellId: "c1", record: record() });
+    expect(manager.sessionsForEditor(editor)).toEqual([holding]);
+  });
+
+  it("matches notebook-aware document selectors for bound editors", () => {
+    const editor = cellEditor();
+    const uri = C.cellUri(notebookPath, "c1");
+    manager.registerExternalDocument(editor, { editor, uri, cellId: "c1", record: record() });
+    const session = { adapter: { id: "test", grammarScopes: ["source.python"] } };
+
+    // Scheme now follows the document, not a hard-coded "file".
+    expect(manager.selectorMatches([{ scheme: "vscode-notebook-cell" }], session, editor)).toBe(
+      true,
+    );
+    expect(manager.selectorMatches([{ scheme: "file" }], session, editor)).toBe(false);
+    // The LSP 3.17 notebook filter shape.
+    expect(
+      manager.selectorMatches(
+        [{ notebook: { scheme: "file", notebookType: "jupyter-notebook" }, language: "python" }],
+        session,
+        editor,
+      ),
+    ).toBe(true);
+    expect(
+      manager.selectorMatches(
+        [{ notebook: { notebookType: "other-notebook" }, language: "python" }],
+        session,
+        editor,
+      ),
+    ).toBe(false);
+    expect(manager.selectorMatches([{ notebook: "jupyter-notebook" }], session, editor)).toBe(true);
+    // A notebook filter never matches a plain file editor.
+    const fileEditor = {
+      getGrammar: () => ({ scopeName: "source.python" }),
+      getPath: () => path.resolve("proj", "a.py"),
+    };
+    expect(manager.selectorMatches([{ notebook: "jupyter-notebook" }], session, fileEditor)).toBe(
+      false,
+    );
+    // Patterns run against the notebook's path for a cell.
+    expect(manager.selectorMatches([{ pattern: "**/*.ipynb" }], session, editor)).toBe(true);
+  });
+
+  it("starts one session for concurrent ensureSession calls", async () => {
+    // No real child process: the race under test is between resolveServer
+    // completions, not the handshake.
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    let resolves = 0;
+    const adapter = {
+      id: "test",
+      displayName: "Test",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => {
+        resolves++;
+        await Promise.resolve();
+        return { command: "fake-server" };
+      },
+    };
+    manager.registerAdapter(adapter);
+    const root = path.resolve("proj");
+    const [first, second] = await Promise.all([
+      manager.ensureSession(adapter, root),
+      manager.ensureSession(adapter, root),
+    ]);
+    expect(first).toBe(second);
+    expect(resolves).toBe(2);
+    expect(manager.allSessions().length).toBe(1);
+  });
+});
+
 describe("LanguageServerManager session lifetime", () => {
   let manager;
   const sessionAt = (rootPath) => {

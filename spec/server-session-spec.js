@@ -622,10 +622,7 @@ describe("ServerSession against a fake server", () => {
       const cells = [{ uri: "vscode-notebook-cell:///C:/proj/nb.ipynb#c1", languageId: "python" }];
 
       session.openNotebook({ ...notebook, version: 1, cells: [] }, cells);
-      session.changeNotebook(
-        { uri: notebook.uri, version: 2 },
-        { cells: { textContent: [] } },
-      );
+      session.changeNotebook({ uri: notebook.uri, version: 2 }, { cells: { textContent: [] } });
       session.saveNotebook({ uri: notebook.uri });
       session.closeNotebook({ uri: notebook.uri }, [{ uri: cells[0].uri }]);
 
