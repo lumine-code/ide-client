@@ -56,19 +56,6 @@
       "minimum": 0,
       "default": 3
     },
-    "codeLens": {
-      "title": "Code Lens",
-      "description": "Actionable command links rendered above the symbols they describe.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "title": "Enabled",
-          "description": "Show code lens links above symbols. Also settable per language in scoped settings.",
-          "type": "boolean",
-          "default": false
-        }
-      }
-    },
     "semanticTokens": {
       "title": "Semantic Tokens",
       "description": "Server-computed highlighting layered over the grammar's own.",
@@ -180,6 +167,11 @@
     "intentions.list": {
       "versions": {
         "1.0.0": "provideIntentionsList"
+      }
+    },
+    "code-lens.provider": {
+      "versions": {
+        "1.0.0": "provideCodeLens"
       }
     }
   },

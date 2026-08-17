@@ -37,21 +37,6 @@
   text-align: left;
 }
 
-.ide-client-code-lens {
-  font-size: 0.85em;
-  line-height: 1.8;
-  color: var(--text-color-subtle);
-}
-.ide-client-code-lens a {
-  color: var(--text-color-subtle);
-  cursor: pointer;
-  margin-right: 1em;
-}
-.ide-client-code-lens a:hover {
-  color: var(--text-color-info);
-  text-decoration: underline;
-}
-
 /* The label lives in a pseudo-element fed by a CSS custom property set on the
    decorated span, so the buffer text itself stays untouched. Font and color
    are reset explicitly so surrounding grammar scopes do not bleed in. */
