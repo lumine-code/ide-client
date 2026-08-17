@@ -19,7 +19,7 @@ describe("ide-client item actions", () => {
 
     const restart = byCommand.get("ide-client:restart-server");
     expect(restart.name).toBe("Restart Server");
-    expect(restart.description).toBe("Restart the selected server without leaving the list");
+    expect(restart.description).toBe("Restart the selected server without leaving the list.");
     expect(restart.keystrokes).toEqual(["alt-r"]);
 
     expect(byCommand.get("ide-client:stop-server").keystrokes).toEqual(["alt-delete"]);
