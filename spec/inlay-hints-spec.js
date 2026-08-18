@@ -165,7 +165,7 @@ describe("InlayHints", () => {
     // The labels are pseudo-element content and occupy no space until this
     // package's own stylesheet is loaded.
     const styles = lumine.themes.requireStylesheet(
-      path.join(__dirname, "..", "styles", "ide-client.css"),
+      path.join(__dirname, "..", "styles", "main.css"),
     );
     try {
       await attach(() => [
