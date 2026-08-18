@@ -1192,6 +1192,64 @@ describe("LanguageServerManager teardown", () => {
   });
 });
 
+describe("LanguageServerManager server messages", () => {
+  let manager, session;
+  beforeEach(() => {
+    manager = new LanguageServerManager();
+    session = { adapter: { id: "test", displayName: "Test Language Server" } };
+    spyOn(lumine.notifications, "addError");
+    spyOn(lumine.notifications, "addWarning");
+  });
+  afterEach(async () => manager.deactivate());
+
+  it("names the server a message came from", () => {
+    manager.showMessage(2, "Configuration file reloaded.", session);
+    const [message, options] = lumine.notifications.addWarning.calls.mostRecent().args;
+    expect(message).toBe("Test Language Server: Configuration file reloaded.");
+    // One line and nothing under it: a headline is the whole notification.
+    expect(options).toBeUndefined();
+  });
+
+  it("still names a server it has no session for", () => {
+    manager.showMessage(1, "Something failed.", undefined);
+    const [message] = lumine.notifications.addError.calls.mostRecent().args;
+    expect(message).toBe("Language server: Something failed.");
+  });
+
+  it("describes a message that runs past its first line", () => {
+    manager.showMessage(
+      1,
+      [
+        "Enumeration of workspace source files is taking longer than 10 seconds.",
+        "This may be because:",
+        "* You have opened your home directory as a workspace",
+        "* Your workspace contains a very large number of files",
+        "To reduce this time, open a workspace directory with fewer files.",
+      ].join("\n"),
+      session,
+    );
+    const [message, options] = lumine.notifications.addError.calls.mostRecent().args;
+    expect(message).toBe(
+      "Test Language Server: Enumeration of workspace source files is taking longer than 10 seconds.",
+    );
+    // The closing sentence is a paragraph of its own. Without the blank line
+    // markdown reads it as a continuation of the bullet above it, and it
+    // renders inside that bullet.
+    expect(options.description).toBe(
+      [
+        "This may be because:",
+        "* You have opened your home directory as a workspace",
+        "* Your workspace contains a very large number of files",
+        "",
+        "To reduce this time, open a workspace directory with fewer files.",
+      ].join("\n"),
+    );
+    // Long enough to scroll, so long enough to outlast the five seconds an
+    // undismissable notification gets.
+    expect(options.dismissable).toBe(true);
+  });
+});
+
 describe("languageIdForEditor", () => {
   const editorWith = (scopeName, name) => ({
     getGrammar: () => ({ scopeName, name }),
