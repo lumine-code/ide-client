@@ -15,7 +15,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Diagnostics**: supports both pushed and LSP 3.17 pull diagnostics, forwarding results to the linter package when installed.
 - **Completions**: serves language-server completions to autocomplete.
 - **Symbols**: serves document and project symbols to the symbol hub.
-- **Inlay hints**: renders inline type and parameter-name labels for the visible part of the editor.
+- **Inlay hints**: serves the server's inferred-type and parameter-name labels to the inlay-hints package, which renders them.
 - **Code lens**: serves the server's actionable command links to the code-lens package, which renders them.
 - **Semantic tokens**: layers server-computed highlighting over the grammar's own; disabled by default.
 - **Server list**: lists every running server with its state and what it covers — a project root, the workspace, or a file opened outside the project — and restarts, stops, or opens the log of any of them without leaving the list.
@@ -127,6 +127,7 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `refactor.provider`: provided to rename UIs; resolves to a path-to-edits map, with prepare support.
 - `intentions.list`: provided to the intentions UI to serve code actions and quick fixes at the cursor.
 - `code-lens.provider`: provided to the code lens UI to serve the actionable links shown above the code.
+- `inlay-hints.provider`: provided to the inlay hints UI to serve the labels a server computes for the visible rows.
 - `linter.registry`: consumed to push server diagnostics into the linter UI, one delegate per server.
 - `busy-signal`: consumed to surface server work-done progress on the busy indicator.
 - `status-bar`: consumed to show the running servers in an item that opens the server list.

@@ -9,7 +9,7 @@ Registers a language server with the editor. The adapter says how to launch it a
 | Consumed by | `consumeIdeClient(client)`                        |
 | Owner       | `ide-client` (bundled)                            |
 
-An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the thirteen UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `outline.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
+An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the fourteen UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `outline.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
 
 The full types are `lib/main.d.ts` in this package.
 

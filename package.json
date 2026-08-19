@@ -69,26 +69,6 @@
         }
       }
     },
-    "inlayHints": {
-      "title": "Inlay Hints",
-      "description": "Inline type and parameter-name labels rendered between characters.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "title": "Enabled",
-          "description": "Show inlay hints in the visible part of the editor. Also settable per language in scoped settings.",
-          "type": "boolean",
-          "default": true
-        },
-        "maxLabelLength": {
-          "title": "Maximum Label Length",
-          "description": "Longer hint labels are truncated with an ellipsis.",
-          "type": "integer",
-          "minimum": 1,
-          "default": 48
-        }
-      }
-    },
     "statusBar": {
       "title": "Status Bar",
       "description": "Indicator for the language servers this window is running.",
@@ -172,6 +152,11 @@
     "code-lens.provider": {
       "versions": {
         "1.0.0": "provideCodeLens"
+      }
+    },
+    "inlay-hints.provider": {
+      "versions": {
+        "1.0.0": "provideInlayHints"
       }
     }
   },
