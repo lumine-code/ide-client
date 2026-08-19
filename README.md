@@ -17,7 +17,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 - **Symbols**: serves document and project symbols to the symbol hub.
 - **Inlay hints**: serves the server's inferred-type and parameter-name labels to the inlay-hints package, which renders them.
 - **Code lens**: serves the server's actionable command links to the code-lens package, which renders them.
-- **Semantic tokens**: layers server-computed highlighting over the grammar's own; disabled by default.
+- **Semantic tokens**: serves the server's classification of the identifiers to the semantic-tokens package, which layers it over the grammar highlighting.
 - **Server list**: lists every running server with its state and what it covers — a project root, the workspace, or a file opened outside the project — and restarts, stops, or opens the log of any of them without leaving the list.
 - **Server details**: reports what a server says about itself — the process it runs in, the command that started it, the documents and diagnostics it holds, and the capabilities it advertised.
 - **Managed servers**: downloads, updates and removes the language servers whose adapter says where to get them, verifying each download against the checksum its source publishes.
@@ -128,6 +128,7 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `intentions.list`: provided to the intentions UI to serve code actions and quick fixes at the cursor.
 - `code-lens.provider`: provided to the code lens UI to serve the actionable links shown above the code.
 - `inlay-hints.provider`: provided to the inlay hints UI to serve the labels a server computes for the visible rows.
+- `semantic-tokens.provider`: provided to the semantic tokens UI to serve the server's classification of the identifiers.
 - `linter.registry`: consumed to push server diagnostics into the linter UI, one delegate per server.
 - `busy-signal`: consumed to surface server work-done progress on the busy indicator.
 - `status-bar`: consumed to show the running servers in an item that opens the server list.
