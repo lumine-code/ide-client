@@ -101,6 +101,26 @@ describe("ide-client package", () => {
       lumine.config.unset("ide-missing.notifyWhenMissing");
     });
 
+    // A notification button dismisses nothing on its own, and both of these are
+    // terminal, so a banner still asking the question is the whole of what the
+    // user sees after answering it.
+    it("closes itself once Never Ask Again has been pressed", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      const notification = service.reportMissingServer("ide-missing");
+      notification.getOptions().buttons.at(-1).onDidClick();
+      expect(notification.isDismissed()).toBe(true);
+      lumine.config.unset("ide-missing.notifyWhenMissing");
+    });
+
+    it("closes itself once Install has been pressed", () => {
+      service.registerAdapter(adapterFor(descriptor));
+      spyOn(main, "installServer").and.returnValue(Promise.resolve());
+      const notification = service.reportMissingServer("ide-missing");
+      notification.getOptions().buttons.at(0).onDidClick();
+      expect(main.installServer).toHaveBeenCalledWith("ide-missing");
+      expect(notification.isDismissed()).toBe(true);
+    });
+
     it("is armed again once a session for that adapter starts", () => {
       service.registerAdapter(adapterFor(descriptor));
       service.reportMissingServer("ide-missing");
