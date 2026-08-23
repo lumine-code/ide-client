@@ -361,4 +361,37 @@ describe("ide-client package", () => {
     expect(main.showLogForAdapter).toHaveBeenCalledWith("ide-example");
     lumine.config.unset("ide-client.restartLimit");
   });
+
+  const gaveUp = () => ({
+    adapter: { id: "ide-example", displayName: "Example Language Server" },
+    failureCount: 1,
+  });
+
+  // A notification button dismisses nothing on its own, and this banner sits
+  // over the workspace center the log opens into.
+  it("closes the banner it raised once the log it pointed at is open", async () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    lumine.notifications.clear();
+    const editor = await lumine.workspace.open();
+    spyOn(main, "showLogForAdapter").and.returnValue(Promise.resolve(editor));
+
+    main.reportServerGaveUp(gaveUp());
+    const notification = lumine.notifications.getNotifications().at(-1);
+    await notification.getOptions().buttons[0].onDidClick();
+    expect(main.showLogForAdapter).toHaveBeenCalledWith("ide-example");
+    expect(notification.isDismissed()).toBe(true);
+  });
+
+  // An open can decline, e.g. when the workspace center is full, and then the
+  // notification is the one record left of what happened.
+  it("keeps the banner up when the log could not be opened", async () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    lumine.notifications.clear();
+    spyOn(main, "showLogForAdapter").and.returnValue(Promise.resolve());
+
+    main.reportServerGaveUp(gaveUp());
+    const notification = lumine.notifications.getNotifications().at(-1);
+    await notification.getOptions().buttons[0].onDidClick();
+    expect(notification.isDismissed()).toBe(false);
+  });
 });
