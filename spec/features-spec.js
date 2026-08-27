@@ -40,6 +40,9 @@ const sessionFor = (adapter, capabilities, result) => {
 
 const managerWith = (...sessions) => ({
   addCapabilityFragment() {},
+  onDidChangeSession: () => ({ dispose() {} }),
+  onDidChangeFeatures: () => ({ dispose() {} }),
+  onDidChangeCapabilities: () => ({ dispose() {} }),
   uriForEditor: (editor) => {
     const editorPath = editor.getPath?.();
     return editorPath ? require("../lib/converters").pathToUri(editorPath) : null;

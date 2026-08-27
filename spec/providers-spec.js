@@ -14,6 +14,9 @@ const managerWith = (...args) => {
   const sessions = args.filter(Boolean);
   return {
     addCapabilityFragment() {},
+    onDidChangeSession: () => ({ dispose() {} }),
+    onDidChangeFeatures: () => ({ dispose() {} }),
+    onDidChangeCapabilities: () => ({ dispose() {} }),
     allGrammarScopes: () => ["source.js"],
     activeSessionsForEditor: async () => sessions,
     activeSessionForEditor: async () => sessions[0] || null,
@@ -127,6 +130,25 @@ describe("SignatureProvider", () => {
 });
 
 describe("OutlineProvider", () => {
+  it("invalidates when a language server becomes ready", () => {
+    let didChangeSession;
+    const manager = managerWith(null);
+    manager.onDidChangeSession = (callback) => {
+      didChangeSession = callback;
+      return { dispose() {} };
+    };
+    const provider = new OutlineProvider(manager);
+    const invalidate = jasmine.createSpy("invalidate");
+    provider.onDidInvalidate(invalidate);
+
+    didChangeSession({ state: "starting" });
+    expect(invalidate).not.toHaveBeenCalled();
+
+    didChangeSession({ state: "running" });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    provider.dispose();
+  });
+
   it("maps hierarchical DocumentSymbol results", async () => {
     const symbols = [
       {
