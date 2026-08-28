@@ -172,7 +172,7 @@
   "dependencies": {
     "picomatch": "^4.0.7",
     "tar": "^7.5.22",
-    "vscode-jsonrpc": "^9.0.1"
+    "vscode-jsonrpc": "^9.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
