@@ -13,7 +13,19 @@ describe("ide-client item actions", () => {
     await lumine.packages.deactivatePackage("ide-client");
   });
 
-  it("derives its actions from the command registrations and the keymap", () => {
+  it("derives its session actions from the command registrations and the keymap", async () => {
+    await list.update({
+      items: [
+        {
+          id: "pyright:/project",
+          label: "pyright Server",
+          detail: "Root · /project",
+          state: "running",
+          session: {},
+        },
+      ],
+    });
+    await list.selectIndex(0);
     const actions = list.itemActions();
     const byCommand = new Map(actions.map((action) => [action.command, action]));
 
@@ -25,9 +37,8 @@ describe("ide-client item actions", () => {
     expect(byCommand.get("ide-client:stop-server").keystrokes).toEqual(["alt-delete"]);
     expect(byCommand.get("ide-client:show-server-log").keystrokes).toEqual(["alt-l"]);
     expect(byCommand.get("ide-client:show-problems").keystrokes).toEqual(["alt-p"]);
-    // The Enter action is listed for what it does, not for a key it does not
-    // need: confirming the row is already how it runs.
-    expect(byCommand.get("ide-client:show-details").keystrokes).toEqual([]);
+    expect(byCommand.get("ide-client:show-problems").scope).toBe("list");
+    expect(byCommand.get("ide-client:show-details").keystrokes).toEqual(["enter"]);
 
     // Every action explains itself with more than a restated title.
     for (const action of actions) {
@@ -42,6 +53,54 @@ describe("ide-client item actions", () => {
     expect(byCommand.has("ide-client:restart")).toBe(false);
     expect(byCommand.has("ide-client:show-log")).toBe(false);
     expect(byCommand.has("ide-client:toggle-problems")).toBe(false);
+  });
+
+  it("keeps only the session-wide action when no server is selected", async () => {
+    await list.update({ items: [] });
+
+    expect(list.itemActions().map((action) => action.command)).toEqual([
+      "ide-client:show-problems",
+    ]);
+  });
+
+  it("switches the managed-server primary action between install and update", async () => {
+    const managedList = main.getManagedMenu().list;
+    const selectEntry = async (installed) => {
+      await managedList.update({
+        items: [
+          {
+            id: "example",
+            label: "Example Server",
+            detail: installed ? "1.0.0 · installed" : "not installed",
+            state: installed ? null : "missing",
+            entry: { adapter: { id: "example" }, installed },
+          },
+        ],
+      });
+      await managedList.selectIndex(0);
+      return new Map(managedList.itemActions().map((action) => [action.command, action]));
+    };
+
+    let actions = await selectEntry(null);
+    expect([...actions.keys()]).toEqual([
+      "ide-client:install-server",
+      "ide-client:check-server-updates",
+    ]);
+    expect(actions.get("ide-client:install-server").keystrokes).toEqual(["enter", "alt-i"]);
+    expect(actions.get("ide-client:check-server-updates").scope).toBe("list");
+
+    actions = await selectEntry("1.0.0");
+    expect([...actions.keys()]).toEqual([
+      "ide-client:update-server",
+      "ide-client:uninstall-server",
+      "ide-client:check-server-updates",
+    ]);
+    expect(actions.get("ide-client:update-server").keystrokes).toEqual(["enter", "alt-u"]);
+
+    managedList.selectNone();
+    expect(managedList.itemActions().map((action) => action.command)).toEqual([
+      "ide-client:check-server-updates",
+    ]);
   });
 
   it("shows the actions as a flow step and runs one against the server list", async () => {
