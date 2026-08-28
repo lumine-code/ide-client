@@ -170,13 +170,13 @@
     }
   },
   "dependencies": {
-    "picomatch": "^4.0.5",
+    "picomatch": "^4.0.7",
     "tar": "^7.5.22",
     "vscode-jsonrpc": "^9.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.8.1",
+    "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-n": "^18.3.0",
     "globals": "^17.11.0",
