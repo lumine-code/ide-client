@@ -1,6 +1,6 @@
 {
   // Actions of the server list. They are registered on the list element, so
-  // each one also appears in the item-actions list (F12) with the keystroke
+  // each one also appears in the item-actions list with the keystroke
   // below. Bindings resolve against the query editor, which is where the
   // dialog's keymaps point. `ide-client:show-details` is deliberately absent:
   // it is what Enter already does.
