@@ -1,7 +1,6 @@
 const path = require("path");
 const HoverProvider = require("../lib/hover-provider");
 const SignatureProvider = require("../lib/signature-provider");
-const OutlineProvider = require("../lib/outline-provider");
 
 const stubEditor = {
   getPath: () => path.join(__dirname, "example.js"),
@@ -126,75 +125,5 @@ describe("SignatureProvider", () => {
     expect(result).toBe(help);
     expect(requests[0].method).toBe("textDocument/signatureHelp");
     expect(requests[0].params.context).toEqual({ triggerKind: 1, isRetrigger: false });
-  });
-});
-
-describe("OutlineProvider", () => {
-  it("invalidates when a language server becomes ready", () => {
-    let didChangeSession;
-    const manager = managerWith(null);
-    manager.onDidChangeSession = (callback) => {
-      didChangeSession = callback;
-      return { dispose() {} };
-    };
-    const provider = new OutlineProvider(manager);
-    const invalidate = jasmine.createSpy("invalidate");
-    provider.onDidInvalidate(invalidate);
-
-    didChangeSession({ state: "starting" });
-    expect(invalidate).not.toHaveBeenCalled();
-
-    didChangeSession({ state: "running" });
-    expect(invalidate).toHaveBeenCalledTimes(1);
-    provider.dispose();
-  });
-
-  it("maps hierarchical DocumentSymbol results", async () => {
-    const symbols = [
-      {
-        name: "Outer",
-        kind: 5,
-        range: { start: { line: 0, character: 0 }, end: { line: 9, character: 1 } },
-        selectionRange: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
-        children: [
-          {
-            name: "inner",
-            kind: 6,
-            range: { start: { line: 1, character: 2 }, end: { line: 3, character: 3 } },
-            selectionRange: { start: { line: 1, character: 2 }, end: { line: 1, character: 7 } },
-          },
-        ],
-      },
-    ];
-    const provider = new OutlineProvider(managerWith(sessionWith(symbols)));
-    const { outlineTrees } = await provider.getOutline(stubEditor);
-    expect(outlineTrees.length).toBe(1);
-    expect(outlineTrees[0].kind).toBe("class");
-    expect(outlineTrees[0].plainText).toBe("Outer");
-    expect(outlineTrees[0].startPosition).toEqual([0, 6]);
-    expect(outlineTrees[0].endPosition).toEqual([9, 1]);
-    expect(outlineTrees[0].children[0].plainText).toBe("inner");
-    expect(outlineTrees[0].children[0].kind).toBe("method");
-  });
-  it("nests flat SymbolInformation results by container name", async () => {
-    const location = (line) => ({
-      uri: "file:///project/example.js",
-      range: { start: { line, character: 0 }, end: { line, character: 5 } },
-    });
-    const symbols = [
-      { name: "Outer", kind: 5, location: location(0) },
-      { name: "inner", kind: 12, location: location(1), containerName: "Outer" },
-      { name: "loose", kind: 13, location: location(5), containerName: "Missing" },
-    ];
-    const provider = new OutlineProvider(managerWith(sessionWith(symbols)));
-    const { outlineTrees } = await provider.getOutline(stubEditor);
-    expect(outlineTrees.map((node) => node.plainText)).toEqual(["Outer", "loose"]);
-    expect(outlineTrees[0].children.map((node) => node.plainText)).toEqual(["inner"]);
-  });
-  it("returns empty trees for empty results and null without a session", async () => {
-    const provider = new OutlineProvider(managerWith(sessionWith([])));
-    expect(await provider.getOutline(stubEditor)).toEqual({ outlineTrees: [] });
-    const missing = new OutlineProvider(managerWith(null));
-    expect(await missing.getOutline(stubEditor)).toBeNull();
   });
 });

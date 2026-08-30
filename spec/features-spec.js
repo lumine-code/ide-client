@@ -1,6 +1,5 @@
 const path = require("path");
 const ServerSession = require("../lib/server-session");
-const OutlineProvider = require("../lib/outline-provider");
 const SymbolProvider = require("../lib/symbol-provider");
 const CodeFormatProvider = require("../lib/code-format-provider");
 const HoverProvider = require("../lib/hover-provider");
@@ -96,11 +95,9 @@ describe("feature switches", () => {
       expect(featureEnabled(adapter, "hover", stubEditor())).toBe(false);
     });
     it("covers every feature in the vocabulary with a method", () => {
-      // `outline` shares documentSymbol and its caller names the feature
-      // explicitly; every other feature has a protocol-method mapping.
       const mapped = new Set(Object.values(METHOD_FEATURES));
       const unmapped = FEATURES.filter((feature) => !mapped.has(feature));
-      expect(unmapped).toEqual(["outline"]);
+      expect(unmapped).toEqual([]);
     });
   });
 
@@ -111,12 +108,11 @@ describe("feature switches", () => {
       lumine.config.set("ide-a.features.hover", false);
       expect(session.supports("textDocument/hover", stubEditor())).toBe(false);
     });
-    it("keeps outline and go-to-symbol apart on one request", () => {
+    it("uses one symbols switch for every document-symbol consumer", () => {
       const session = sessionFor(adapterFor("ide-a"), { documentSymbolProvider: true });
       const editor = stubEditor();
-      lumine.config.set("ide-a.features.outline", false);
-      expect(session.supports("textDocument/documentSymbol", editor, "outline")).toBe(false);
-      expect(session.supports("textDocument/documentSymbol", editor, "symbols")).toBe(true);
+      lumine.config.set("ide-a.features.symbols", false);
+      expect(session.supports("textDocument/documentSymbol", editor)).toBe(false);
     });
     it("gates each hierarchy on its own switch", () => {
       // A server that offers both is normal, and wanting only one of them is
@@ -201,7 +197,7 @@ describe("feature switches", () => {
       expect(second.request.calls.count()).toBe(1);
     });
 
-    it("stops the outline without stopping go-to-symbol", async () => {
+    it("keeps the navigation point and structural range of document symbols", async () => {
       const symbols = [
         {
           name: "thing",
@@ -211,12 +207,15 @@ describe("feature switches", () => {
         },
       ];
       const session = sessionFor(adapterFor("ide-a"), { documentSymbolProvider: true }, symbols);
-      const manager = managerWith(session);
-      lumine.config.set("ide-a.features.outline", false);
-
-      expect(await new OutlineProvider(manager).getOutline(stubEditor())).toBeNull();
-      const found = await new SymbolProvider(manager).getSymbols({ editor: stubEditor() });
+      const found = await new SymbolProvider(managerWith(session)).getSymbols({
+        editor: stubEditor(),
+      });
       expect(found.map(({ name }) => name)).toEqual(["thing"]);
+      expect(found[0].position).toEqual([0, 0]);
+      expect(found[0].range).toEqual([
+        [0, 0],
+        [0, 5],
+      ]);
     });
 
     it("picks the server that can serve the query the symbol type will make", async () => {

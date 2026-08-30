@@ -9,7 +9,7 @@ Registers a language server with the editor. The adapter says how to launch it a
 | Consumed by | `consumeIdeClient(client)`                        |
 | Owner       | `ide-client` (bundled)                            |
 
-An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the fifteen UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `outline.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, `semantic-tokens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
+An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, `semantic-tokens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
 
 The full types are `lib/main.d.ts` in this package.
 
@@ -325,7 +325,7 @@ The once-per-window flag is cleared as soon as a session for that adapter starts
 
 More than one adapter commonly covers one grammar — a type checker beside a linter — and for the requests whose answers cannot be merged the hub has to pick one server. Left to itself it picks whichever adapter registered first, which is package activation order and says nothing about which server the user wants. The feature switches are how that choice is expressed: a switched-off server is skipped, and the next one that can serve the request answers instead.
 
-The vocabulary is `diagnostics`, `autocomplete`, `hover`, `signature`, `definition`, `references`, `callHierarchy`, `typeHierarchy`, `symbols`, `outline`, `format`, `rename`, `codeActions`, `inlayHints`, `codeLens`, and `semanticTokens`. They are names for what the user sees, not protocol methods: one switch covers all three formatting requests, and `symbols` and `outline` split `textDocument/documentSymbol` between go-to-symbol and the outline panel.
+The vocabulary is `diagnostics`, `autocomplete`, `hover`, `signature`, `definition`, `references`, `callHierarchy`, `typeHierarchy`, `symbols`, `format`, `rename`, `codeActions`, `inlayHints`, `codeLens`, and `semanticTokens`. They are names for what the user sees, not protocol methods: one switch covers all three formatting requests, and `symbols` supplies go-to-symbol, the outline, and breadcrumbs from one document-symbol result.
 
 Declare them in your `package.json` under `features`, listing **only what your server actually advertises** — a switch for a capability the server never had is a control that does nothing:
 

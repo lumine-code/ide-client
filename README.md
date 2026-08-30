@@ -118,7 +118,6 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `symbol.provider`: provided to the symbol hub to serve document and project symbols.
 - `hover.provider`: provided to hover UIs to serve documentation at a buffer position.
 - `hover.signature-provider`: provided to signature-help UIs to serve call signatures while typing.
-- `outline.provider`: provided to outline UIs to serve the hierarchical document outline.
 - `code-format.range`: provided to formatting orchestrators; resolves a selected range to text edits from the server.
 - `code-format.file`: provided to formatting orchestrators; resolves a whole file to text edits from the server.
 - `code-format.on-type`: provided to formatting orchestrators; resolves text edits as the user types a trigger character.

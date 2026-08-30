@@ -96,11 +96,6 @@
         "1.0.0": "provideHoverSignature"
       }
     },
-    "outline.provider": {
-      "versions": {
-        "1.0.0": "provideOutline"
-      }
-    },
     "code-format.range": {
       "versions": {
         "1.0.0": "provideCodeFormatRange"
