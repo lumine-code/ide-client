@@ -218,6 +218,34 @@ describe("feature switches", () => {
       ]);
     });
 
+    it("invalidates cached symbols when a server becomes ready", () => {
+      const callbacks = {};
+      const manager = managerWith();
+      manager.onDidChangeSession = (callback) => {
+        callbacks.session = callback;
+        return { dispose() {} };
+      };
+      manager.onDidChangeFeatures = (callback) => {
+        callbacks.features = callback;
+        return { dispose() {} };
+      };
+      manager.onDidChangeCapabilities = (callback) => {
+        callbacks.capabilities = callback;
+        return { dispose() {} };
+      };
+      const provider = new SymbolProvider(manager);
+      const invalidate = jasmine.createSpy("invalidate");
+      provider.onShouldClearCache(invalidate);
+
+      callbacks.session({ state: "starting" });
+      expect(invalidate).not.toHaveBeenCalled();
+      callbacks.session({ state: "running" });
+      callbacks.features();
+      callbacks.capabilities();
+      expect(invalidate).toHaveBeenCalledTimes(3);
+      provider.destroy();
+    });
+
     it("picks the server that can serve the query the symbol type will make", async () => {
       // A server with only references must not be picked to list symbols.
       const referencesOnly = sessionFor(adapterFor("ide-a"), { referencesProvider: true }, []);
