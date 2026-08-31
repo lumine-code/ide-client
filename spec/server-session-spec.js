@@ -18,11 +18,13 @@ const until = async (condition, timeout = 5000) => {
 describe("ServerSession against a fake server", () => {
   let manager, tempDir, sessions;
 
-  const startSession = async (config = {}, adapterExtras = {}) => {
+  const createSession = (config = {}, adapterExtras = {}, startup = null) => {
+    const ipc = config.transport === "ipc";
     const launch = {
-      command: process.execPath,
-      args: [FIXTURE, JSON.stringify(config)],
+      command: ipc ? FIXTURE : process.execPath,
+      args: ipc ? [JSON.stringify(config)] : [FIXTURE, JSON.stringify(config)],
       env: { ELECTRON_RUN_AS_NODE: "1" },
+      transport: config.transport || "stdio",
     };
     const adapter = {
       id: "fake",
@@ -31,8 +33,13 @@ describe("ServerSession against a fake server", () => {
       resolveServer: () => launch,
       ...adapterExtras,
     };
-    const session = new ServerSession(manager, adapter, tempDir, launch);
+    const session = new ServerSession(manager, adapter, tempDir, launch, startup);
     sessions.push(session);
+    return session;
+  };
+
+  const startSession = async (config = {}, adapterExtras = {}, startup = null) => {
+    const session = createSession(config, adapterExtras, startup);
     await session.start();
     return session;
   };
@@ -124,6 +131,33 @@ describe("ServerSession against a fake server", () => {
     expect(initialized).toBeGreaterThan(-1);
     expect(configured).toBeGreaterThan(initialized);
     expect(received[configured].params.settings).toEqual({ example: { size: 2 } });
+  });
+
+  it("uses a preflight startup snapshot without repeating adapter hooks", async () => {
+    const initialization = jasmine.createSpy("initialization");
+    const settings = jasmine.createSpy("settings");
+    const workspaceFolders = [{ uri: "file:///preflight", name: "preflight" }];
+    const session = await startSession(
+      {},
+      { getInitializationOptions: initialization, getSettings: settings },
+      {
+        workspaceFolders,
+        initializationOptions: { preflight: true },
+        settings: { fake: { preflight: true } },
+      },
+    );
+
+    const received = await receivedMessages(session);
+    const initialize = received.find(({ method }) => method === "initialize");
+    const configured = received.find(({ method }) => method === "workspace/didChangeConfiguration");
+    expect(initialize.params.workspaceFolders).toEqual(workspaceFolders);
+    expect(initialize.params.initializationOptions).toEqual({ preflight: true });
+    expect(configured.params.settings).toEqual({ fake: { preflight: true } });
+    expect(initialization).not.toHaveBeenCalled();
+    expect(settings).not.toHaveBeenCalled();
+    settings.and.returnValue({ fake: { dynamic: true } });
+    await session.pushSettings();
+    expect(settings).toHaveBeenCalledTimes(1);
   });
 
   it("answers a server that asks for the current workspace folders", async () => {
@@ -603,6 +637,52 @@ describe("ServerSession against a fake server", () => {
     expect(session.state).toBe("failed");
   });
 
+  it("reports a missing executable without an uncaught child-process error", async () => {
+    const launch = { command: path.join(tempDir, "missing-language-server.exe") };
+    const adapter = {
+      id: "missing",
+      displayName: "Missing Server",
+      grammarScopes: ["source.js"],
+    };
+    const session = new ServerSession(manager, adapter, tempDir, launch);
+    sessions.push(session);
+    const states = [];
+    session.onDidChangeState(({ state }) => states.push(state));
+
+    await expectAsync(session.start()).toBeRejectedWithError(/ENOENT/);
+
+    expect(session.state).toBe("stopped");
+    expect(states.filter((state) => state === "failed").length).toBe(1);
+    sessions.splice(sessions.indexOf(session), 1);
+  });
+
+  it("fails once on RPC close and rejects every pending request", async () => {
+    const session = await startSession({
+      hang: ["textDocument/hover", "textDocument/references"],
+    });
+    const restart = spyOn(manager, "scheduleRestart").and.callThrough();
+    const states = [];
+    session.onDidChangeState(({ state }) => states.push(state));
+    const hover = session.request("textDocument/hover", {}).then(
+      () => "resolved",
+      () => "rejected",
+    );
+    const references = session.request("textDocument/references", {}).then(
+      () => "resolved",
+      () => "rejected",
+    );
+    session.process.stdout.destroy();
+
+    await until(() => session.state === "failed");
+
+    expect(await hover).toBe("rejected");
+    expect(await references).toBe("rejected");
+    expect(states.filter((state) => state === "failed").length).toBe(1);
+    expect(restart).toHaveBeenCalledTimes(1);
+    await until(() => session.process.exitCode != null || session.process.signalCode != null);
+    await session.stop();
+  });
+
   it("lets the server exit on its own rather than killing it mid-frame", async () => {
     const session = await startSession();
     const child = session.process;
@@ -611,6 +691,247 @@ describe("ServerSession against a fake server", () => {
     // `exit` was read and acted on: a killed process reports its signal here.
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
+  });
+
+  it("shares one stop operation with concurrent and reentrant callers", async () => {
+    const session = await startSession();
+    const states = [];
+    let reentrant;
+    session.onDidChangeState(({ state }) => {
+      states.push(state);
+      if (state === "stopping") reentrant = session.stop();
+    });
+    const request = spyOn(session.connection, "request").and.callThrough();
+    const notify = spyOn(session.connection, "notify").and.callThrough();
+
+    const first = session.stop();
+    const concurrent = session.stop();
+
+    expect(reentrant).toBe(first);
+    expect(concurrent).toBe(first);
+    await first;
+    expect(session.stop()).toBe(first);
+    expect(request.calls.allArgs().filter(([method]) => method === "shutdown").length).toBe(1);
+    expect(notify.calls.allArgs().filter(([method]) => method === "exit").length).toBe(1);
+    expect(states).toEqual(["stopping", "stopped"]);
+  });
+
+  it("finishes cleanup and reaches stopped when one disposer fails", async () => {
+    const session = await startSession();
+    let documentDisposed = false;
+    session.documents.set("synthetic", {
+      subscriptions: { dispose: () => (documentDisposed = true) },
+    });
+    const dispose = session.connection.dispose.bind(session.connection);
+    spyOn(session.connection, "dispose").and.callFake(() => {
+      dispose();
+      throw new Error("dispose failed");
+    });
+
+    await expectAsync(session.stop()).toBeRejectedWithError("dispose failed");
+
+    expect(session.state).toBe("stopped");
+    expect(documentDisposed).toBe(true);
+    expect(session.documents.size).toBe(0);
+    // afterEach must not await the deliberately rejected shared stop again.
+    sessions.splice(sessions.indexOf(session), 1);
+  });
+
+  it("does not let a stopped startup become running or send delayed settings", async () => {
+    let settingsStarted;
+    const awaitingSettings = new Promise((resolve) => (settingsStarted = resolve));
+    const settings = new Promise(() => {});
+    const session = createSession(
+      {},
+      {
+        getSettings() {
+          settingsStarted();
+          return settings;
+        },
+      },
+    );
+    const states = [];
+    session.onDidChangeState(({ state }) => states.push(state));
+    const starting = session.start();
+    await awaitingSettings;
+    const request = spyOn(session.connection, "request").and.callThrough();
+    const notify = spyOn(session.connection, "notify").and.callThrough();
+
+    const stopping = session.stop();
+    session.notify("test/afterStop", {});
+    await Promise.all([starting, stopping]);
+
+    expect(session.state).toBe("stopped");
+    expect(states).toEqual(["stopping", "stopped"]);
+    expect(request.calls.allArgs().some(([method]) => method === "shutdown")).toBe(false);
+    expect(
+      notify.calls.allArgs().some(([method]) => method === "workspace/didChangeConfiguration"),
+    ).toBe(false);
+    expect(notify.calls.allArgs().some(([method]) => method === "test/afterStop")).toBe(false);
+    await expectAsync(session.request("test/getReceived")).toBeRejectedWithError(
+      "Language server is not running",
+    );
+  });
+
+  it("cancels a startup blocked in initialization options", async () => {
+    let hookStarted;
+    const awaitingHook = new Promise((resolve) => (hookStarted = resolve));
+    const session = createSession(
+      {},
+      {
+        getInitializationOptions() {
+          hookStarted();
+          return new Promise(() => {});
+        },
+      },
+    );
+    const starting = session.start();
+    await awaitingHook;
+
+    const stopping = session.stop();
+    await Promise.all([starting, stopping]);
+
+    expect(session.state).toBe("stopped");
+  });
+
+  it("allows a server with a one-second exit interceptor to leave naturally", async () => {
+    const session = await startSession({ exitDelay: 1100 });
+    const child = session.process;
+
+    await session.stop();
+
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+  });
+
+  it("waits for physical process exit after the hard-kill fallback", async () => {
+    const session = await startSession({ ignoreExit: true });
+    const child = session.process;
+    let exited = false;
+    child.once("exit", () => (exited = true));
+
+    await session.stop();
+
+    expect(exited).toBe(true);
+    expect(child.exitCode != null || child.signalCode != null).toBe(true);
+  });
+
+  it("bounds a hanging exit notification and still completes cleanup", async () => {
+    const session = await startSession();
+    const notify = session.connection.notify.bind(session.connection);
+    spyOn(session.connection, "notify").and.callFake((method, ...args) =>
+      method === "exit" ? new Promise(() => {}) : notify(method, ...args),
+    );
+
+    await expectAsync(session.stop()).toBeRejectedWithError(/Timed out after 1000ms/);
+
+    expect(session.state).toBe("stopped");
+    expect(session.process.exitCode != null || session.process.signalCode != null).toBe(true);
+    sessions.splice(sessions.indexOf(session), 1);
+  });
+
+  it("rejects after a bounded wait when SIGKILL is refused", async () => {
+    const session = await startSession({ ignoreExit: true });
+    manager.ownedSessions.add(session);
+    const child = session.process;
+    const kill = child.kill.bind(child);
+    spyOn(child, "kill").and.returnValue(false);
+
+    await expectAsync(session.stop()).toBeRejectedWithError(/refused SIGKILL/);
+
+    expect(session.state).toBe("stopped");
+    expect(manager.ownedSessions.has(session)).toBe(true);
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill.and.callFake(kill);
+    session.kill();
+    await exited;
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(child.kill.calls.mostRecent().args).toEqual(["SIGKILL"]);
+    expect(session.processExited).toBe(true);
+    expect(manager.ownedSessions.has(session)).toBe(false);
+    sessions.splice(sessions.indexOf(session), 1);
+  });
+
+  it("hard-kills even when connection and socket disposal fail", () => {
+    const adapter = { id: "fake", displayName: "Fake Server" };
+    const session = new ServerSession(manager, adapter, tempDir, {});
+    let connectionDisposed = false;
+    let socketDestroyed = false;
+    let signal;
+    session.connection = {
+      dispose() {
+        connectionDisposed = true;
+        throw new Error("connection dispose failed");
+      },
+    };
+    session.socket = {
+      destroy() {
+        socketDestroyed = true;
+        throw new Error("socket destroy failed");
+      },
+    };
+    session.process = { kill: (value) => (signal = value) };
+
+    expect(() => session.kill()).not.toThrow();
+
+    expect(connectionDisposed).toBe(true);
+    expect(socketDestroyed).toBe(true);
+    expect(signal).toBe("SIGKILL");
+    expect(session.state).toBe("stopped");
+  });
+
+  it("starts and stops an IPC server through the same lifecycle", async () => {
+    const session = await startSession({ transport: "ipc" });
+
+    const messages = await receivedMessages(session);
+    expect(messages.some(({ method }) => method === "initialize")).toBe(true);
+    await session.stop();
+
+    expect(session.state).toBe("stopped");
+    expect(session.process.exitCode).toBe(0);
+    expect(session.process.signalCode).toBeNull();
+  });
+
+  it("cancels a socket connection that is still opening", async () => {
+    const EventEmitter = require("events");
+    const ChildProcess = require("child_process");
+    const net = require("net");
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.stderr = new EventEmitter();
+    child.stdin = {
+      end() {
+        queueMicrotask(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        });
+      },
+    };
+    child.kill = () => {
+      child.signalCode = "SIGKILL";
+      child.emit("exit", null, "SIGKILL");
+      return true;
+    };
+    const socket = new EventEmitter();
+    socket.destroyed = false;
+    socket.destroy = () => {
+      if (socket.destroyed) return;
+      socket.destroyed = true;
+      queueMicrotask(() => socket.emit("close"));
+    };
+    spyOn(ChildProcess, "spawn").and.returnValue(child);
+    spyOn(net, "connect").and.returnValue(socket);
+    const session = createSession({ transport: "socket" });
+
+    const starting = session.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const stopping = session.stop();
+    await Promise.all([starting, stopping]);
+
+    expect(socket.destroyed).toBe(true);
+    expect(session.connection).toBeUndefined();
+    expect(session.state).toBe("stopped");
   });
 
   // `shutdown` is a request like any other, and a server that accepts it and

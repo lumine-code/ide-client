@@ -6,15 +6,23 @@
 //   responseSequences { method: [cannedResult, ...] } consumed per request
 //   hang          methods recorded but never answered, to keep a request in flight
 //   onOpen        messages the server emits after receiving didOpen
+//   exitDelay     milliseconds to wait after exit before terminating
+//   ignoreExit    keep running after exit, to exercise the client's hard kill
+//   transport     stdio (default) or ipc
 // Test-only requests: test/getReceived returns every message received so far,
-// test/notify emits params verbatim (server-initiated traffic), test/crash
+// test/notify emits params verbatim (server-initiated traffic), and test/crash
 // exits with code 1.
 
 let buffer = Buffer.alloc(0);
 const config = JSON.parse(process.argv[2] || "{}");
 const received = [];
+if (config.ignoreExit) setInterval(() => {}, 60_000);
 
 function send(message) {
+  if (config.transport === "ipc" && process.send) {
+    process.send(message);
+    return;
+  }
   const body = Buffer.from(JSON.stringify(message), "utf8");
   process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
   process.stdout.write(body);
@@ -30,7 +38,12 @@ function handle(message) {
   if (method === "initialize")
     return reply(id, { capabilities: config.capabilities || {}, serverInfo: config.serverInfo });
   if (method === "shutdown") return reply(id, null);
-  if (method === "exit") process.exit(0);
+  if (method === "exit") {
+    if (config.ignoreExit) return;
+    if (config.exitDelay) setTimeout(() => process.exit(0), config.exitDelay);
+    else process.exit(0);
+    return;
+  }
   if (method === "test/getReceived") return reply(id, received);
   if (method === "test/notify") {
     send(params);
@@ -49,7 +62,7 @@ function handle(message) {
   }
 }
 
-process.stdin.on("data", (chunk) => {
+function read(chunk) {
   buffer = Buffer.concat([buffer, chunk]);
   while (true) {
     const boundary = buffer.indexOf("\r\n\r\n");
@@ -64,4 +77,7 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.subarray(start + length);
     handle(JSON.parse(body));
   }
-});
+}
+
+if (config.transport === "ipc") process.on("message", handle);
+else process.stdin.on("data", read);

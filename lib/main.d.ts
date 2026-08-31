@@ -172,6 +172,8 @@ export interface LanguageServerAdapter {
   getSettings?(): unknown | Promise<unknown>;
   /** Config key paths whose changes re-push getSettings() to running sessions. */
   settingsKeyPaths?: string[];
+  /** Config key paths read while resolving or initializing; changes restart every server. */
+  restartKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
   /** Handle a server-specific JSON-RPC request not implemented by the LSP core. */
   handleServerRequest?(
@@ -269,7 +271,9 @@ export interface LanguageServerService {
     params?: unknown,
     options?: RequestOptions,
   ): Promise<any> | undefined;
-  restart(session: LanguageServerSession): Promise<LanguageServerSession>;
+  /** Resolves with the final replacement, or null when stale, cancelled, or unavailable. */
+  restart(session: LanguageServerSession): Promise<LanguageServerSession | null>;
+  /** Removes the logical server from routing and waits for every in-flight generation to stop. */
   stop(session: LanguageServerSession): Promise<void>;
   getLog(adapterId: string): string;
   /**

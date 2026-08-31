@@ -10,6 +10,14 @@ const C = require("../lib/converters");
 const flushPromises = async () => {
   for (let tick = 0; tick < 50; tick++) await Promise.resolve();
 };
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+};
 
 describe("LanguageServerManager adapters", () => {
   let manager;
@@ -55,6 +63,260 @@ describe("LanguageServerManager adapters", () => {
     await manager.unregisterAdapter(adapter);
     expect(manager.adaptersForEditor(editor)).toEqual([]);
     expect(changes[1]).toEqual({ adapter, registered: false });
+  });
+  it("restarts instead of pushing settings when a changed key belongs to both lists", async () => {
+    const adapter = {
+      id: "test",
+      displayName: "Test",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => null,
+      settingsKeyPaths: ["ide-client"],
+      restartKeyPaths: ["ide-client.trace"],
+    };
+    spyOn(manager, "restartAdapter").and.returnValue(Promise.resolve([]));
+    spyOn(manager, "pushSettingsForAdapter");
+    const registration = manager.registerAdapter(adapter);
+
+    lumine.config.set("ide-client.trace", "messages");
+
+    expect(manager.restartAdapter).toHaveBeenCalledWith(adapter, { reportErrors: true });
+    expect(manager.pushSettingsForAdapter).not.toHaveBeenCalled();
+    registration.dispose();
+    lumine.config.unset("ide-client.trace");
+  });
+  it("pushes the newest dynamic settings once after a slow start reaches running", async () => {
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const adapter = { id: "test", displayName: "Test", grammarScopes: ["source.test"] };
+    const session = {
+      adapter,
+      rootPath,
+      folders: new Set([rootPath]),
+      state: "starting",
+      settingsRevision: 0,
+      pushSettings: jasmine.createSpy("pushSettings").and.resolveTo(),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const controller = manager.controllerForSession(session, true);
+
+    manager.pushSettingsForAdapter(adapter);
+    manager.pushSettingsForAdapter(adapter);
+    expect(session.pushSettings).not.toHaveBeenCalled();
+    session.state = "running";
+    manager.didChangeSession(session);
+    await flushPromises();
+
+    expect(session.pushSettings.calls.count()).toBe(1);
+    expect(session.settingsRevision).toBe(2);
+    expect(controller.settingsPromise).toBeNull();
+  });
+  it("drains a settings revision bumped just before the previous guard clears", async () => {
+    const pushed = deferred();
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const adapter = { id: "test", displayName: "Test", grammarScopes: ["source.test"] };
+    const session = {
+      adapter,
+      rootPath,
+      folders: new Set([rootPath]),
+      state: "running",
+      settingsRevision: 0,
+      pushSettings: jasmine
+        .createSpy("pushSettings")
+        .and.callFake(() =>
+          session.pushSettings.calls.count() === 1 ? pushed.promise : Promise.resolve(),
+        ),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const controller = manager.controllerForSession(session, true);
+
+    manager.pushSettingsForAdapter(adapter);
+    pushed.promise.then(() => manager.pushSettingsForAdapter(adapter));
+    pushed.resolve();
+    await flushPromises();
+
+    expect(session.pushSettings.calls.count()).toBe(2);
+    expect(session.settingsRevision).toBe(2);
+    expect(controller.settingsPromise).toBeNull();
+  });
+  it("drains a newer settings revision after the previous push rejects", async () => {
+    const pushed = deferred();
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const adapter = { id: "test", displayName: "Test", grammarScopes: ["source.test"] };
+    const session = {
+      adapter,
+      rootPath,
+      folders: new Set([rootPath]),
+      state: "running",
+      settingsRevision: 0,
+      pushSettings: jasmine
+        .createSpy("pushSettings")
+        .and.callFake(() =>
+          session.pushSettings.calls.count() === 1 ? pushed.promise : Promise.resolve(),
+        ),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const controller = manager.controllerForSession(session, true);
+    spyOn(manager, "log");
+    const notification = spyOn(lumine.notifications, "addError");
+
+    manager.pushSettingsForAdapter(adapter);
+    pushed.promise.catch(() => manager.pushSettingsForAdapter(adapter));
+    pushed.reject(new Error("old settings push failed"));
+    await flushPromises();
+
+    expect(session.pushSettings.calls.count()).toBe(2);
+    expect(session.settingsRevision).toBe(2);
+    expect(controller.settingsPromise).toBeNull();
+    expect(manager.log.calls.count()).toBe(1);
+    expect(notification.calls.count()).toBe(1);
+  });
+  it("reports a failed settings revision once and waits for a newer revision", async () => {
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const adapter = { id: "test", displayName: "Test", grammarScopes: ["source.test"] };
+    const session = {
+      adapter,
+      rootPath,
+      folders: new Set([rootPath]),
+      state: "running",
+      settingsRevision: 0,
+      pushSettings: jasmine
+        .createSpy("pushSettings")
+        .and.returnValues(Promise.reject(new Error("settings failed")), Promise.resolve()),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const controller = manager.controllerForSession(session, true);
+    spyOn(manager, "log");
+    const notification = spyOn(lumine.notifications, "addError");
+
+    manager.pushSettingsForAdapter(adapter);
+    await flushPromises();
+    await flushPromises();
+
+    expect(session.pushSettings.calls.count()).toBe(1);
+    expect(session.settingsRevision).toBe(0);
+    expect(controller.settingsPromise).toBeNull();
+    expect(notification.calls.count()).toBe(1);
+
+    manager.pushSettingsForAdapter(adapter);
+    await flushPromises();
+
+    expect(session.pushSettings.calls.count()).toBe(2);
+    expect(session.settingsRevision).toBe(2);
+    expect(notification.calls.count()).toBe(1);
+  });
+  it("reports one shared resolver failure for parallel editor attaches", async () => {
+    const rootPath = lumine.project.getPaths()[0];
+    const error = new Error("shared resolve failure");
+    const adapter = {
+      id: "test",
+      displayName: "Test",
+      grammarScopes: ["source.test"],
+      resolveServer: jasmine.createSpy("resolveServer").and.rejectWith(error),
+    };
+    manager.adapters.set(adapter.id, adapter);
+    const report = spyOn(manager, "reportStartFailure").and.callThrough();
+    const notification = spyOn(lumine.notifications, "addError");
+    const editor = (name) => ({
+      getPath: () => path.join(rootPath, name),
+      getGrammar: () => ({ scopeName: "source.test" }),
+    });
+    const editors = [editor("a.test"), editor("b.test")];
+    spyOn(lumine.workspace, "getTextEditors").and.returnValue(editors);
+
+    await Promise.all(editors.map((item) => manager.attachAdapter(adapter, item)));
+
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(report.calls.count()).toBe(1);
+    expect(notification.calls.count()).toBe(1);
+    expect(manager.allSessions()).toEqual([]);
+  });
+  it("reports and cleans one shared start failure for parallel editor attaches", async () => {
+    const rootPath = lumine.project.getPaths()[0];
+    const adapter = {
+      id: "test",
+      displayName: "Test",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => ({ command: "server" }),
+    };
+    manager.adapters.set(adapter.id, adapter);
+    const start = spyOn(ServerSession.prototype, "start").and.rejectWith(
+      new Error("shared start failure"),
+    );
+    const stop = spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    const report = spyOn(manager, "reportStartFailure").and.callThrough();
+    const notification = spyOn(lumine.notifications, "addError");
+    const editor = (name) => ({
+      getPath: () => path.join(rootPath, name),
+      getGrammar: () => ({ scopeName: "source.test" }),
+    });
+    const editors = [editor("a.test"), editor("b.test")];
+    spyOn(lumine.workspace, "getTextEditors").and.returnValue(editors);
+
+    await Promise.all(editors.map((item) => manager.attachAdapter(adapter, item)));
+    await flushPromises();
+
+    expect(start.calls.count()).toBe(1);
+    expect(stop.calls.count()).toBe(1);
+    expect(report.calls.count()).toBe(1);
+    expect(notification.calls.count()).toBe(1);
+    expect(manager.allSessions()).toEqual([]);
+    expect(manager.controllers.size).toBe(0);
+  });
+  it("quarantines a replacement adapter until the old same-id child exits", async () => {
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const oldAdapter = {
+      id: "test",
+      displayName: "Old Test",
+      grammarScopes: ["source.old-test"],
+      resolveServer: async () => null,
+    };
+    manager.registerAdapter(oldAdapter);
+    const oldSession = {
+      adapter: oldAdapter,
+      rootPath,
+      folders: new Set([rootPath]),
+      state: "running",
+      processExited: false,
+      process: { exitCode: null, signalCode: null },
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        oldSession.state = "stopped";
+        manager.didChangeSession(oldSession);
+        throw new Error("old child survived stop");
+      }),
+    };
+    manager.sessions.set(manager.keyFor(oldAdapter, rootPath), oldSession);
+    manager.controllerForSession(oldSession, true);
+    manager.ownedSessions.add(oldSession);
+    spyOn(console, "error");
+    await manager.unregisterAdapter(oldAdapter);
+
+    const newAdapter = {
+      id: "test",
+      displayName: "New Test",
+      grammarScopes: ["source.new-test"],
+      resolveServer: jasmine.createSpy("resolveServer").and.resolveTo({ command: "new-server" }),
+    };
+    manager.registerAdapter(newAdapter);
+    const start = spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    const ensuring = manager.ensureSession(newAdapter, rootPath);
+    await flushPromises();
+
+    expect(newAdapter.resolveServer).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    oldSession.processExited = true;
+    manager.didExitProcess(oldSession);
+
+    const replacement = await ensuring;
+    expect(newAdapter.resolveServer.calls.count()).toBe(1);
+    expect(start.calls.count()).toBe(1);
+    expect(replacement.adapter).toBe(newAdapter);
   });
 });
 
@@ -216,7 +478,7 @@ describe("LanguageServerManager external documents", () => {
       manager.ensureSession(adapter, root),
     ]);
     expect(first).toBe(second);
-    expect(resolves).toBe(2);
+    expect(resolves).toBe(1);
     expect(manager.allSessions().length).toBe(1);
   });
 });
@@ -319,14 +581,16 @@ describe("LanguageServerManager session lifetime", () => {
   it("leaves an editor alone when its root did not change", async () => {
     const filePath = path.join(lumine.project.getPaths()[0], "c.test");
     const editor = await lumine.workspace.open(filePath);
-    manager.registerAdapter({
+    const adapter = {
       id: "test",
       displayName: "Test",
       grammarScopes: [editor.getGrammar().scopeName],
       resolveServer: async () => null,
-    });
+    };
+    manager.registerAdapter(adapter);
     const root = lumine.project.getPaths()[0];
     const session = sessionAt(root);
+    session.adapter = adapter;
     session.documents.set(C.uriKey(require("url").pathToFileURL(filePath).href), {});
     spyOn(manager, "reattachEditor");
     spyOn(manager, "attachEditor");
@@ -381,6 +645,56 @@ describe("LanguageServerManager session lifetime", () => {
     await manager.deactivate();
     expect(manager.idleChecks.size).toBe(0);
   });
+
+  it("cancels a pending first resolution when its project root is removed", async () => {
+    const resolution = deferred();
+    const [root] = lumine.project.getPaths();
+    const adapter = {
+      id: "pending",
+      displayName: "Pending",
+      grammarScopes: ["source.pending-never-open"],
+      resolveServer: () => resolution.promise,
+    };
+    manager.registerAdapter(adapter);
+    manager.knownRoots = [root];
+    const starting = manager.ensureSession(adapter, root);
+    const start = spyOn(ServerSession.prototype, "start");
+    spyOn(lumine.project, "getPaths").and.returnValue([]);
+
+    manager.projectPathsChanged();
+    resolution.resolve({ command: "too-late" });
+
+    expect(await starting).toBeNull();
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.controllers.size).toBe(0);
+  });
+
+  it("keeps a pending resolution when an unrelated project root changes", async () => {
+    const resolution = deferred();
+    const root = path.join(path.sep, "tmp", "kept");
+    const other = path.join(path.sep, "tmp", "other");
+    const adapter = {
+      id: "pending",
+      displayName: "Pending",
+      grammarScopes: ["source.pending-never-open"],
+      resolveServer: () => resolution.promise,
+    };
+    manager.registerAdapter(adapter);
+    manager.knownRoots = [root];
+    spyOn(lumine.project, "getPaths").and.returnValue([root, other]);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    const starting = manager.ensureSession(adapter, root);
+
+    manager.projectPathsChanged();
+    resolution.resolve({ command: "server" });
+
+    const session = await starting;
+    expect(session).not.toBeNull();
+    expect(session.rootPath).toBe(root);
+    expect(manager.sessionForRoute(adapter, root)).toBe(session);
+  });
 });
 
 describe("LanguageServerManager multi-root servers", () => {
@@ -422,8 +736,46 @@ describe("LanguageServerManager multi-root servers", () => {
     expect(first.folders.has(rootB)).toBe(true);
     expect(notifications[0].method).toBe("workspace/didChangeWorkspaceFolders");
     expect(notifications[0].params.event.added.map((f) => f.name)).toEqual([path.basename(rootB)]);
+    expect(manager.workspaceFolders(first).map(({ uri }) => uri)).toEqual([
+      C.pathToUri(rootA),
+      C.pathToUri(rootB),
+    ]);
     // Two keys, one server — everything that walks the sessions must see one.
     expect(manager.allSessions().length).toBe(1);
+  });
+
+  it("splits adopted folders when a replacement loses multi-root support", async () => {
+    const session = sessionAt(rootA, MULTI_ROOT);
+    await manager.adoptFolder(adapter, rootB, manager.keyFor(adapter, rootB));
+    const controller = manager.controllerForSession(session, true);
+    session.capabilities = {};
+
+    manager.splitUnsupportedFolders(controller, session);
+
+    expect([...session.folders]).toEqual([rootA]);
+    expect(manager.controllerForRoute(adapter, rootA)).toBe(controller);
+    expect(manager.controllerForRoute(adapter, rootB)).not.toBe(controller);
+    expect(manager.sessions.has(manager.keyFor(adapter, rootB))).toBe(false);
+  });
+
+  it("cancels a pending controller displaced by multi-root adoption", async () => {
+    const resolution = deferred();
+    adapter.resolveServer = jasmine.createSpy("resolveServer").and.returnValue(resolution.promise);
+    const shared = sessionAt(rootA, MULTI_ROOT);
+    const sharedController = manager.controllerForSession(shared, true);
+    const displaced = manager.createController(adapter, rootB);
+    displaced.explicitDemand = true;
+    const hiddenRestart = manager.requestControllerRestart(displaced, { force: true });
+
+    await manager.adoptFolder(adapter, rootB);
+
+    expect(displaced.cancelled).toBe(true);
+    expect(manager.controllers.has(displaced)).toBe(false);
+    expect(manager.controllerForRoute(adapter, rootB)).toBe(sharedController);
+    expect(await hiddenRestart).toBeNull();
+    resolution.resolve({ command: "too-late" });
+    await flushPromises();
+    expect(manager.allSessions()).toEqual([shared]);
   });
 
   it("starts a separate server when the running one cannot take folders", async () => {
@@ -964,7 +1316,8 @@ describe("LanguageServerManager restart", () => {
     session.failureCount = 2;
     manager.sessions.set(key, session);
 
-    await manager.restart(session);
+    const restarted = await manager.restart(session);
+    expect(restarted).not.toBeNull();
 
     const replacement = manager.sessions.get(key);
     expect(replacement).not.toBe(session);
@@ -1066,6 +1419,690 @@ describe("LanguageServerManager restart", () => {
     // Forgotten, so the crash-retry loop stops rather than failing forever.
     expect(manager.keysFor(session)).toEqual([]);
     expect(manager.getLog("test")).toContain("not available");
+  });
+
+  it("shares one restart operation for concurrent callers", async () => {
+    const resolution = deferred();
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: jasmine.createSpy("resolveServer").and.returnValue(resolution.promise),
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const first = manager.restart(session);
+    const concurrent = manager.restart(session);
+    expect(concurrent).toBe(first);
+    await Promise.resolve();
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    resolution.resolve({ command: "server" });
+
+    const replacement = await first;
+    expect(replacement).not.toBe(session);
+    expect(session.stop.calls.count()).toBe(1);
+    expect(ServerSession.prototype.start.calls.count()).toBe(1);
+    expect(manager.restart(session)).not.toBe(first);
+    expect(await manager.restart(session)).toBeNull();
+  });
+
+  it("keeps the healthy server when preparing its replacement fails", async () => {
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => {
+        throw new Error("bad configured path");
+      },
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("stop"),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+
+    await expectAsync(manager.restart(session)).toBeRejectedWithError(/bad configured path/);
+    expect(session.stop).not.toHaveBeenCalled();
+    expect(manager.sessionForRoute(adapter, rootPath)).toBe(session);
+  });
+
+  it("cleans up a replacement whose start rejects before surfacing the error", async () => {
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => ({ command: "server" }),
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    spyOn(ServerSession.prototype, "start").and.rejectWith(new Error("initialize failed"));
+    const stop = spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+
+    await expectAsync(manager.restart(session)).toBeRejectedWithError(/initialize failed/);
+
+    expect(stop.calls.count()).toBe(1);
+    expect(stop.calls.mostRecent().object.state).toBe("stopped");
+    expect(manager.allSessions()).toEqual([]);
+  });
+
+  it("preflights initialization options and settings before stopping the old server", async () => {
+    const order = [];
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => {
+        order.push("resolve");
+        return { command: "server" };
+      },
+      getInitializationOptions: async () => {
+        order.push("initializationOptions");
+        return { mode: "new" };
+      },
+      getSettings: async () => {
+        order.push("settings");
+        throw new Error("invalid settings");
+      },
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("stop").and.callFake(async () => order.push("stop")),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+
+    await expectAsync(manager.restart(session)).toBeRejectedWithError(/invalid settings/);
+
+    expect(order).toEqual(["resolve", "initializationOptions", "settings"]);
+    expect(session.stop).not.toHaveBeenCalled();
+    expect(manager.sessionForRoute(adapter, rootPath)).toBe(session);
+  });
+
+  it("actively cancels a starting replacement when a newer generation arrives", async () => {
+    const hangingStart = deferred();
+    let firstReplacement;
+    let starts = 0;
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => ({ command: `server-${starts + 1}` }),
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    spyOn(ServerSession.prototype, "start").and.callFake(function () {
+      starts++;
+      if (starts === 1) {
+        firstReplacement = this;
+        return hangingStart.promise;
+      }
+      this.state = "running";
+      return Promise.resolve();
+    });
+    const stop = spyOn(ServerSession.prototype, "stop").and.callFake(function () {
+      this.state = "stopped";
+      if (this === firstReplacement) hangingStart.resolve();
+      return Promise.resolve();
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restart(session);
+    await flushPromises();
+    expect(starts).toBe(1);
+    const controller = manager.controllerForSession(firstReplacement);
+    const joined = manager.requestControllerRestart(controller, { force: true });
+
+    expect(joined).toBe(restarting);
+    expect(stop).toHaveBeenCalledWith();
+    expect(firstReplacement.state).toBe("stopped");
+    const replacement = await restarting;
+    expect(starts).toBe(2);
+    expect(replacement).not.toBe(firstReplacement);
+    expect(replacement.state).toBe("running");
+  });
+
+  it("discards a resolved launch when a newer restart generation exists", async () => {
+    const firstResolution = deferred();
+    let calls = 0;
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.restart-generation"],
+      resolveServer: () => (++calls === 1 ? firstResolution.promise : { command: "new-server" }),
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+    manager.registerAdapter(adapter);
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    manager.controllerForSession(session, true);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+
+    const restarting = manager.restartAdapter(adapter);
+    const joined = manager.restartAdapter(adapter);
+    expect(joined).toBe(restarting);
+    firstResolution.resolve({ command: "stale-server" });
+
+    const [replacement] = await restarting;
+    expect(calls).toBe(2);
+    expect(session.stop.calls.count()).toBe(1);
+    expect(replacement.launch.command).toBe("new-server");
+    expect(ServerSession.prototype.start.calls.count()).toBe(1);
+  });
+
+  it("continues with the latest generation when an obsolete stop rejects", async () => {
+    const stopping = deferred();
+    let version = "first";
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.stop-generation"],
+      resolveServer: jasmine.createSpy("resolveServer").and.callFake(async () => ({
+        command: `${version}-server`,
+      })),
+    };
+    manager.registerAdapter(adapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      processExited: true,
+      process: { exitCode: null, signalCode: null },
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.returnValue(stopping.promise),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    manager.controllerForSession(session, true);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restartAdapter(adapter);
+    await flushPromises();
+    expect(session.stop).toHaveBeenCalled();
+    version = "latest";
+    const joined = manager.restartAdapter(adapter);
+    expect(joined).toBe(restarting);
+    stopping.reject(new Error("obsolete stop failure"));
+
+    const [replacement] = await restarting;
+    expect(adapter.resolveServer.calls.count()).toBe(2);
+    expect(session.stop.calls.count()).toBe(1);
+    expect(replacement.launch.command).toBe("latest-server");
+    expect(replacement.state).toBe("running");
+  });
+
+  it("does not start a newer generation when the old process may still be alive", async () => {
+    const stopping = deferred();
+    let version = "first";
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.live-stop-generation"],
+      resolveServer: jasmine.createSpy("resolveServer").and.callFake(async () => ({
+        command: `${version}-server`,
+      })),
+    };
+    manager.registerAdapter(adapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      processExited: false,
+      process: { exitCode: null, signalCode: null },
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.returnValue(stopping.promise),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    manager.controllerForSession(session, true);
+    const start = spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restartAdapter(adapter);
+    await flushPromises();
+    version = "latest";
+    expect(manager.restartAdapter(adapter)).toBe(restarting);
+    session.state = "stopped";
+    stopping.reject(new Error("old process is still alive"));
+
+    await expectAsync(restarting).toBeRejectedWithError(/old process is still alive/);
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.allSessions()).toEqual([]);
+    const controller = manager.controllerForSession(session);
+    expect(controller.blockedByLiveStop).toBe(session);
+    controller.explicitDemand = false;
+    manager.pruneUndemandedControllers();
+    expect(manager.controllerForRoute(adapter, rootPath)).toBe(controller);
+
+    const filePath = path.join(rootPath, "reopened.test");
+    const editor = {
+      getPath: () => filePath,
+      getGrammar: () => ({ scopeName: "source.live-stop-generation" }),
+    };
+    spyOn(lumine.workspace, "getTextEditors").and.returnValue([editor]);
+
+    version = "after-exit";
+    const finalRestart = manager.restartAdapter(adapter);
+    const attaching = manager.ensureSession(adapter, rootPath, { filePath });
+    await flushPromises();
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.controllerForRoute(adapter, rootPath)).toBe(controller);
+
+    session.processExited = true;
+    manager.didExitProcess(session);
+    const [replacement] = await finalRestart;
+    expect(await attaching).toBe(replacement);
+    expect(adapter.resolveServer.calls.count()).toBe(2);
+    expect(start.calls.count()).toBe(1);
+    expect(replacement.launch.command).toBe("after-exit-server");
+  });
+
+  it("does not reattach an adapter whose restart round failed", async () => {
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.restart-failure"],
+      resolveServer: jasmine
+        .createSpy("resolveServer")
+        .and.rejectWith(new Error("restart preflight failed")),
+    };
+    manager.registerAdapter(adapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("stop"),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    manager.controllerForSession(session, true);
+    const reattach = spyOn(manager, "reattachAll").and.callFake(async () => {});
+    const notification = spyOn(lumine.notifications, "addError");
+
+    const restarting = manager.restartAdapter(adapter, { reportErrors: true });
+    await expectAsync(restarting).toBeRejectedWithError(/restart preflight failed/);
+    await flushPromises();
+
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(session.stop).not.toHaveBeenCalled();
+    expect(reattach).not.toHaveBeenCalled();
+    expect(notification.calls.count()).toBe(1);
+  });
+
+  it("re-preflights when the controller root changes during resolution", async () => {
+    const firstResolution = deferred();
+    const rootA = path.join(path.sep, "tmp", "a");
+    const rootB = path.join(path.sep, "tmp", "b");
+    const contexts = [];
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: (context) => {
+        contexts.push(context.rootPath);
+        return contexts.length === 1
+          ? firstResolution.promise
+          : { command: "server-from-current-root" };
+      },
+    };
+    const session = failedSession({
+      adapter,
+      rootPath: rootA,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootA, rootB]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootA), session);
+    manager.sessions.set(manager.keyFor(adapter, rootB), session);
+    const controller = manager.controllerForSession(session, true);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restart(session);
+    await flushPromises();
+    manager.unbindController(controller, rootA);
+    controller.rootPath = rootB;
+    session.rootPath = rootB;
+    manager.markControllerStructureChanged(controller);
+    await flushPromises();
+
+    const replacement = await restarting;
+    firstResolution.resolve({ command: "stale-root" });
+    expect(contexts).toEqual([rootA, rootB]);
+    expect(session.stop.calls.count()).toBe(1);
+    expect(replacement.rootPath).toBe(rootB);
+    expect(replacement.startup.workspaceFolders.map(({ uri }) => uri)).toEqual([
+      C.pathToUri(rootB),
+    ]);
+  });
+
+  it("does not let an automatic retry downgrade a configuration restart", async () => {
+    const resolution = deferred();
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: () => resolution.promise,
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restart(session);
+    await flushPromises();
+    manager.scheduleRestart(session);
+    advanceClock(1000);
+    await flushPromises();
+    const controller = manager.controllerForSession(session);
+    expect(controller.desiredRetry).toBe(false);
+    resolution.resolve({ command: "configured-server" });
+
+    const replacement = await restarting;
+    expect(replacement.failureCount).toBe(0);
+    expect(replacement.launch.command).toBe("configured-server");
+  });
+
+  it("ignores an old retry timer after a healthy manual replacement is running", async () => {
+    const resolution = deferred();
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: jasmine.createSpy("resolveServer").and.returnValue(resolution.promise),
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const start = spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    const stop = spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+
+    const restarting = manager.restart(session);
+    await flushPromises();
+    manager.scheduleRestart(session);
+    resolution.resolve({ command: "healthy-server" });
+    const replacement = await restarting;
+    await flushPromises();
+    expect(manager.controllerForSession(replacement).restartPromise).toBeNull();
+
+    advanceClock(1000);
+    await flushPromises();
+
+    expect(manager.sessionForRoute(adapter, rootPath)).toBe(replacement);
+    expect(replacement.state).toBe("running");
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(start.calls.count()).toBe(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(manager.restartTimers.size).toBe(0);
+  });
+
+  it("cancels a restart that is still resolving when the server is disconnected", async () => {
+    const resolution = deferred();
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: () => resolution.promise,
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("stop").and.callFake(async () => {
+        session.state = "stopped";
+      }),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    const start = spyOn(ServerSession.prototype, "start");
+
+    const restarting = manager.restart(session);
+    await manager.disconnect(session);
+    resolution.resolve({ command: "too-late" });
+
+    expect(await restarting).toBeNull();
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.allSessions()).toEqual([]);
+    expect(manager.controllers.size).toBe(0);
+  });
+
+  it("starts a previously unavailable controller after an adapter restart", async () => {
+    let available = false;
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      restartKeyPaths: ["test.serverPath"],
+      resolveServer: async () => (available ? { command: "server" } : null),
+    };
+    manager.registerAdapter(adapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    expect(await manager.ensureSession(adapter, rootPath)).toBeNull();
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    available = true;
+
+    await manager.restartAdapter(adapter);
+
+    expect(manager.sessionForRoute(adapter, rootPath)?.state).toBe("running");
+  });
+
+  it("does not start a pending project controller after its last editor closes", async () => {
+    const resolution = deferred();
+    let open = true;
+    const rootPath = lumine.project.getPaths()[0];
+    const filePath = path.join(rootPath, "pending.test");
+    const editor = {
+      getPath: () => filePath,
+      getGrammar: () => ({ scopeName: "source.pending" }),
+    };
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.pending"],
+      resolveServer: jasmine.createSpy("resolveServer").and.returnValue(resolution.promise),
+    };
+    manager.adapters.set(adapter.id, adapter);
+    spyOn(lumine.workspace, "getTextEditors").and.callFake(() => (open ? [editor] : []));
+    const start = spyOn(ServerSession.prototype, "start");
+
+    const starting = manager.ensureSession(adapter, rootPath, { filePath });
+    await flushPromises();
+    expect(adapter.resolveServer).toHaveBeenCalled();
+    open = false;
+    manager.pruneUndemandedControllers();
+
+    expect(await starting).toBeNull();
+    resolution.resolve({ command: "too-late" });
+    await flushPromises();
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.controllers.size).toBe(0);
+  });
+
+  it("does not revive an unavailable project controller after its demand closes", async () => {
+    let open = true;
+    let resolves = 0;
+    const rootPath = lumine.project.getPaths()[0];
+    const filePath = path.join(rootPath, "main.test");
+    const editor = {
+      getPath: () => filePath,
+      getGrammar: () => ({ scopeName: "source.unavailable" }),
+    };
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.unavailable"],
+      resolveServer: async () => {
+        resolves++;
+        return null;
+      },
+    };
+    manager.adapters.set(adapter.id, adapter);
+    spyOn(lumine.workspace, "getTextEditors").and.callFake(() => (open ? [editor] : []));
+
+    expect(await manager.ensureSession(adapter, rootPath, { filePath })).toBeNull();
+    expect(manager.controllers.size).toBe(1);
+    open = false;
+    await manager.restartAdapter(adapter);
+
+    expect(resolves).toBe(1);
+    expect(manager.controllers.size).toBe(0);
+    expect(manager.allSessions()).toEqual([]);
+  });
+
+  it("does not let a late resolver from an unregistered adapter replace its successor", async () => {
+    const oldResolution = deferred();
+    const oldAdapter = {
+      id: "test",
+      displayName: "Old Test",
+      grammarScopes: ["source.test"],
+      resolveServer: () => oldResolution.promise,
+    };
+    manager.registerAdapter(oldAdapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const oldEnsure = manager.ensureSession(oldAdapter, rootPath);
+    await manager.unregisterAdapter(oldAdapter);
+
+    const newAdapter = {
+      id: "test",
+      displayName: "New Test",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => ({ command: "new-server" }),
+    };
+    manager.registerAdapter(newAdapter);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    const current = await manager.ensureSession(newAdapter, rootPath);
+    oldResolution.resolve({ command: "old-server" });
+
+    expect(await oldEnsure).toBeNull();
+    expect(manager.sessionForRoute(newAdapter, rootPath)).toBe(current);
+    expect(manager.sessionForRoute(oldAdapter, rootPath)).toBeNull();
+    expect(current.launch.command).toBe("new-server");
   });
 });
 
@@ -1189,6 +2226,63 @@ describe("LanguageServerManager teardown", () => {
 
     expect(session.stop).toHaveBeenCalled();
     expect(session.kill).not.toHaveBeenCalled();
+  });
+
+  it("keeps ownership of a logically stopped live child until its real exit", async () => {
+    const session = {
+      adapter: { id: "live" },
+      state: "running",
+      processExited: false,
+      process: { exitCode: null, signalCode: null },
+      stop: jasmine.createSpy("stop").and.callFake(async () => {
+        session.state = "stopped";
+        manager.didChangeSession(session);
+        throw new Error("kill did not terminate child");
+      }),
+      kill: jasmine.createSpy("kill"),
+    };
+    add("live:/project", session);
+    manager.ownedSessions.add(session);
+
+    await manager.deactivate();
+
+    expect(session.stop).toHaveBeenCalled();
+    expect(session.kill).toHaveBeenCalled();
+    expect(manager.ownedSessions.has(session)).toBe(true);
+    session.processExited = true;
+    manager.didExitProcess(session);
+    expect(manager.ownedSessions.has(session)).toBe(false);
+  });
+
+  it("cancels a resolving restart before the window teardown kills its source", async () => {
+    const resolution = deferred();
+    const adapter = {
+      id: "a",
+      displayName: "A Server",
+      resolveServer: () => resolution.promise,
+    };
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const session = add("a:/project", {
+      adapter,
+      rootPath,
+      state: "running",
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      restartCount: 0,
+      failureCount: 0,
+      stop: jasmine.createSpy("stop"),
+      kill: jasmine.createSpy("kill"),
+    });
+    const start = spyOn(ServerSession.prototype, "start");
+    const restarting = manager.restart(session);
+
+    lumine.emitter.emit("will-destroy");
+    resolution.resolve({ command: "too-late" });
+
+    expect(await restarting).toBeNull();
+    expect(session.kill).toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(manager.controllers.size).toBe(0);
   });
 });
 

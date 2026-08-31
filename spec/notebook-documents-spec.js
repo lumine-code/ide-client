@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
 const NotebookDocuments = require("../lib/notebook-documents");
+const ServerSession = require("../lib/server-session");
 const { notebookSyncMatches, diffCellOrder } = require("../lib/notebook-documents");
 const C = require("../lib/converters");
 
@@ -130,6 +131,75 @@ describe("NotebookDocuments against a fake server", () => {
     notebooks.dispose();
     for (const editor of editors) editor.destroy();
     await manager.deactivate();
+  });
+
+  it("forgets a failed initial session so a later notebook attach can start fresh", async () => {
+    let attempts = 0;
+    let failedSession;
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      attempts++;
+      if (attempts === 1) {
+        failedSession = this;
+        throw new Error("initial notebook start failed");
+      }
+      this.capabilities = { notebookDocumentSync: RUFF_SYNC };
+      this.connection = { notify: jasmine.createSpy("notify") };
+      this.setState("running");
+    });
+    const stop = spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.setState("stopped");
+    });
+    const report = spyOn(manager, "reportStartFailure");
+    registerFakeAdapter();
+    const editor = buildCellEditor("x = 1\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+    });
+
+    await bridge.attached;
+
+    expect(report.calls.count()).toBe(1);
+    expect(report.calls.mostRecent().args[2].message).toBe("initial notebook start failed");
+    expect(stop).toHaveBeenCalled();
+    expect(manager.allSessions()).toEqual([]);
+    expect(manager.controllers.size).toBe(0);
+
+    await notebooks.reattachAll();
+
+    const replacement = manager.allSessions()[0];
+    expect(attempts).toBe(2);
+    expect(replacement).toBeDefined();
+    expect(replacement).not.toBe(failedSession);
+    expect(replacement.state).toBe("running");
+    expect(report.calls.count()).toBe(1);
+  });
+
+  it("reports a notebook resolver failure once through the shared ensure operation", async () => {
+    const adapter = {
+      id: "fake",
+      displayName: "Fake Server",
+      grammarScopes: ["text.plain.null-grammar"],
+      languageId: "python",
+      resolveServer: jasmine
+        .createSpy("resolveServer")
+        .and.rejectWith(new Error("notebook resolve failed")),
+    };
+    manager.registerAdapter(adapter);
+    const report = spyOn(manager, "reportStartFailure").and.callThrough();
+    const notification = spyOn(lumine.notifications, "addError");
+    const editor = buildCellEditor("x = 1\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+    });
+
+    await bridge.attached;
+
+    expect(adapter.resolveServer.calls.count()).toBe(1);
+    expect(report.calls.count()).toBe(1);
+    expect(notification.calls.count()).toBe(1);
+    expect(manager.allSessions()).toEqual([]);
   });
 
   it("opens the notebook once, with cell documents and never textDocument/didOpen", async () => {

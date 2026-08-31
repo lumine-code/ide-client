@@ -45,6 +45,7 @@ interface LanguageServerAdapter {
   getInitializationOptions?(context: { rootPath: string; rootUri: string }): unknown;
   getSettings?(): unknown;
   settingsKeyPaths?: string[];
+  restartKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
   handleServerRequest?(
     method: string,
@@ -99,7 +100,7 @@ The service you receive:
 | `onDidChangeFeatures(fn)`                                         | `{ adapter }` when one of an adapter's feature switches changes.                         |
 | `featureEnabled(adapter, feature, editor?)`                       | Whether that feature is on for that adapter, in that editor's scope.                     |
 | `onDidLog(fn)`, `getLog(adapterId)`                               | Server stderr and protocol log.                                                          |
-| `restart(session)`, `stop(session)`                               | Lifecycle control.                                                                       |
+| `restart(session)`, `stop(session)`                               | Serialized lifecycle control; restart may resolve `null` when cancelled or unavailable.  |
 | `reportMissingServer(adapterId, opts?)`                           | Says once per window that the server was not found; honours the package's opt-out.       |
 | `installServer(adapterId, opts?)`                                 | Fetches and installs the server; reports its own progress and failure.                   |
 | `updateServer(adapterId)`                                         | Installs the newest release, or resolves unchanged when already current.                 |
@@ -158,6 +159,7 @@ module.exports = {
       },
       getSettings: () => ({ mylang: lumine.config.get("my-package.serverSettings") }),
       settingsKeyPaths: ["my-package.serverSettings"],
+      restartKeyPaths: ["my-package.serverPath"],
     });
   },
 };
@@ -179,7 +181,7 @@ A `"project-root"` server that declares `workspace.workspaceFolders.supported` *
 
 The `languageId` sent to the server is resolved in order: `languageIdForScope(scopeName)`, then the built-in scope table, then the blanket `languageId`. Override only the level you actually need.
 
-`getSettings` is pushed as `workspace/didChangeConfiguration` after initialize, and re-pushed whenever a config key listed in `settingsKeyPaths` changes. Without `settingsKeyPaths` the settings are sent once and never refreshed.
+`getSettings` is pushed as `workspace/didChangeConfiguration` after initialize, and re-pushed whenever a config key listed in `settingsKeyPaths` changes. Changes received while a session is starting are coalesced and pushed once it reaches `running`, so its initialization snapshot cannot make a newer setting disappear. A key read by `resolveServer` or `getInitializationOptions` belongs in `restartKeyPaths` instead: the manager serializes and coalesces those changes, restarts every root, and starts a previously unavailable server for files that are already open. A change matching both lists restarts without first pushing settings to the process being replaced. Without either list the settings are sent once and never refreshed.
 
 `handleServerRequest` and `handleServerNotification` cover protocol extensions owned by one server rather than LSP itself. Core client handlers still take precedence; the adapter sees only otherwise-unhandled traffic. Requests must return the JSON-RPC result the server expects, while notifications are also emitted through `session.onNotification` after the adapter observes them.
 
@@ -207,7 +209,7 @@ What follows from an open bridge, with no further wiring:
 
 An untitled notebook cannot open — `openNotebookDocument` returns `null` until the notebook has a path. The bridge is **path-immutable**: on a save-as, dispose it and open a new one, which is also how servers expect a renamed notebook to behave.
 
-A server that exits on its own is restarted on a growing delay, up to `restartLimit` times in a row, and the session is replaced each time — an adapter that holds one has to follow `onDidChangeSession` rather than keep the reference. The limit counts a failure run rather than the life of the window: a server that stays up for a minute has its restarts back, and one that dies on every start reaches the limit and is reported to the user with a way into its log. A restart somebody asked for, through `restart(session)` or the server list, starts a new run. A server that fails its very first start is reported once and not retried, since nothing about it has worked yet.
+A server that exits on its own is restarted on a growing delay, up to `restartLimit` times in a row, and the session is replaced each time — an adapter that holds one has to follow `onDidChangeSession` rather than keep the reference. The limit counts a failure run rather than the life of the window: a server that stays up for a minute has its restarts back, and one that dies on every start reaches the limit and is reported to the user with a way into its log. A restart somebody asked for, through `restart(session)` or the server list, starts a new run. Parallel requests for one logical server share one operation; configuration changes arriving during it cancel the stale start, are coalesced, and leave the final process on the newest configuration. The complete startup input — launch, initialization options, workspace folders, and initial settings — is prepared before the healthy process is stopped, so an invalid new setting leaves it running. `restart` resolves `null` if the adapter returns no launch, its session became stale, or teardown cancelled the operation. A server that fails its very first start is reported once and not retried, since nothing about it has worked yet.
 
 ## Managed servers
 
@@ -357,7 +359,7 @@ The `features` field on the adapter object is the fallback for an adapter with n
 
 ## Teardown
 
-`registerAdapter` returns a `Disposable` that unregisters the adapter and stops its sessions — return it directly from `consumeIdeClient`, as in the example. Sessions are also stopped when `ide-client` deactivates, so an adapter needs no shutdown logic of its own.
+`registerAdapter` returns a `Disposable` that unregisters that exact adapter object and stops every current or in-flight session it owns — return it directly from `consumeIdeClient`, as in the example. `stop(session)` first removes its whole logical server from routing, cancels restart and retry work, and then waits for all of its process generations to stop. Sessions are also stopped when `ide-client` deactivates, so an adapter needs no shutdown logic of its own.
 
 That holds for a window reload too, which never deactivates a package: the servers are killed as the window goes away rather than asked to shut down, since no LSP round trip can finish at that point. Do not add an unload handler of your own — a language server is a child process, and one left running is orphaned for the life of the machine.
 
