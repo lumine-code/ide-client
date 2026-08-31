@@ -218,9 +218,15 @@ describe("feature switches", () => {
       ]);
     });
 
-    it("invalidates cached symbols when a server becomes ready", () => {
+    it("coalesces symbol invalidations for only the editors a server can affect", async () => {
       const callbacks = {};
       const manager = managerWith();
+      const editor = stubEditor();
+      const otherEditor = stubEditor();
+      const adapter = adapterFor("ide-a");
+      const session = { adapter, state: "running" };
+      manager.editorsForSession = (candidate) => (candidate === session ? [editor] : []);
+      manager.editorsForAdapter = (candidate) => (candidate === adapter ? [editor] : []);
       manager.onDidChangeSession = (callback) => {
         callbacks.session = callback;
         return { dispose() {} };
@@ -237,12 +243,15 @@ describe("feature switches", () => {
       const invalidate = jasmine.createSpy("invalidate");
       provider.onShouldClearCache(invalidate);
 
-      callbacks.session({ state: "starting" });
+      callbacks.session({ session, state: "starting" });
       expect(invalidate).not.toHaveBeenCalled();
-      callbacks.session({ state: "running" });
-      callbacks.features();
-      callbacks.capabilities();
-      expect(invalidate).toHaveBeenCalledTimes(3);
+      callbacks.session({ session, state: "running" });
+      callbacks.features({ adapter });
+      callbacks.capabilities({ session });
+      await Promise.resolve();
+
+      expect(invalidate).toHaveBeenCalledOnceWith({ editor });
+      expect(invalidate).not.toHaveBeenCalledWith({ editor: otherEditor });
       provider.destroy();
     });
 

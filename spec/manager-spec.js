@@ -481,6 +481,36 @@ describe("LanguageServerManager external documents", () => {
     expect(resolves).toBe(1);
     expect(manager.allSessions().length).toBe(1);
   });
+
+  it("opens a restored editor before exposing its running session to features", async () => {
+    const root = lumine.project.getPaths()[0];
+    const editor = await lumine.workspace.open(path.join(root, "restored.test"));
+    const adapter = {
+      id: "restored",
+      displayName: "Restored",
+      grammarScopes: [editor.getGrammar().scopeName],
+      resolveServer: async () => null,
+    };
+    manager.adapters.set(adapter.id, adapter);
+    const uri = manager.uriForEditor(editor);
+    const session = {
+      adapter,
+      rootPath: root,
+      state: "running",
+      ready: Promise.resolve(),
+      folders: new Set([root]),
+      documents: new Map(),
+      openEditor: jasmine.createSpy("openEditor").and.callFake(async () => {
+        session.documents.set(C.uriKey(uri), { editor, uri });
+      }),
+      stop: async () => {},
+    };
+    manager.sessions.set(manager.keyFor(adapter, root), session);
+
+    expect(await manager.activeSessionsForEditor(editor)).toEqual([session]);
+    expect(session.openEditor).toHaveBeenCalledOnceWith(editor);
+    editor.destroy();
+  });
 });
 
 describe("LanguageServerManager session lifetime", () => {
@@ -886,6 +916,12 @@ describe("LanguageServerManager capabilities", () => {
       getPath: () => path.join("C:", "project", "x.js"),
       getRootScopeDescriptor: () => ["source.js"],
     };
+    const uri = manager.uriForEditor(editor);
+    for (const session of [linter, checker]) {
+      spyOn(session, "openEditor").and.callFake(async () => {
+        session.documents.set(C.uriKey(uri), { editor, uri });
+      });
+    }
     expect(await manager.activeSessionForFeature(editor, "textDocument/prepareTypeHierarchy")).toBe(
       checker,
     );

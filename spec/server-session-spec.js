@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
 const ServerSession = require("../lib/server-session");
+const SymbolProvider = require("../lib/symbol-provider");
 
 const FIXTURE = path.join(__dirname, "fixtures", "fake-server.js");
 
@@ -266,6 +267,40 @@ describe("ServerSession against a fake server", () => {
     });
     expect(didChange.params.contentChanges[0].text).toBe("two");
     expect(received.some((message) => message.method === "textDocument/didClose")).toBe(true);
+  });
+
+  it("sends didOpen before a restored editor's first document-symbol request", async () => {
+    const filePath = path.join(tempDir, "restored.js");
+    fs.writeFileSync(filePath, "const restored = true;\n");
+    const result = [
+      {
+        name: "restored",
+        kind: 13,
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 22 } },
+        selectionRange: { start: { line: 0, character: 6 }, end: { line: 0, character: 14 } },
+      },
+    ];
+    const session = await startSession({
+      capabilities: { documentSymbolProvider: true },
+      responses: { "textDocument/documentSymbol": result },
+    });
+    session.ready = Promise.resolve();
+    const editor = await lumine.workspace.open(filePath);
+    session.adapter.grammarScopes = [editor.getGrammar().scopeName];
+    manager.adapters.set(session.adapter.id, session.adapter);
+    const rootPath = manager.rootForPath(filePath, session.adapter);
+    manager.sessions.set(manager.keyFor(session.adapter, rootPath), session);
+    const provider = new SymbolProvider(manager);
+
+    const symbols = await provider.getSymbols({ editor, signal: new AbortController().signal });
+    const received = await receivedMessages(session);
+    const methods = received.map(({ method }) => method);
+
+    expect(symbols.map(({ name }) => name)).toEqual(["restored"]);
+    expect(methods.indexOf("textDocument/didOpen")).toBeLessThan(
+      methods.indexOf("textDocument/documentSymbol"),
+    );
+    provider.destroy();
   });
 
   it("sends batched incremental changes in an order that reconstructs the document", async () => {
