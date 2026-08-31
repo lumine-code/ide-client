@@ -212,5 +212,24 @@ describe("RpcConnection", () => {
       connection.dispose();
       await expectAsync(connection.request("anything", {})).toBeRejected();
     });
+
+    it("rejects a request write failure without a second unhandled rejection", async () => {
+      const errors = [];
+      const unhandled = [];
+      const onUnhandled = (error) => unhandled.push(error);
+      connection.onError((error) => errors.push(error));
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        writer.end();
+        await expectAsync(connection.request("anything", {})).toBeRejected();
+        await flush();
+
+        expect(errors.map((error) => error.message)).toContain("write after end");
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.removeListener("unhandledRejection", onUnhandled);
+      }
+    });
   });
 });

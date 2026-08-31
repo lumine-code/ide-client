@@ -858,8 +858,15 @@ describe("ServerSession against a fake server", () => {
       method === "exit" ? new Promise(() => {}) : notify(method, ...args),
     );
 
-    await expectAsync(session.stop()).toBeRejectedWithError(/Timed out after 1000ms/);
+    let failure;
+    try {
+      await session.stop();
+    } catch (error) {
+      failure = error;
+    }
 
+    expect(failure.message).toMatch(/Timed out after 1000ms/);
+    expect(failure.exitNotificationTimedOut).toBe(true);
     expect(session.state).toBe("stopped");
     expect(session.process.exitCode != null || session.process.signalCode != null).toBe(true);
     sessions.splice(sessions.indexOf(session), 1);

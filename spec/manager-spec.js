@@ -1500,6 +1500,50 @@ describe("LanguageServerManager restart", () => {
     expect(await manager.restart(session)).toBeNull();
   });
 
+  it("restarts after exit delivery times out once the old process has exited", async () => {
+    const adapter = {
+      id: "test",
+      displayName: "Test Language Server",
+      grammarScopes: ["source.test"],
+      resolveServer: async () => ({ command: "server" }),
+    };
+    manager.registerAdapter(adapter);
+    const rootPath = path.join(path.sep, "tmp", "project");
+    const timeout = Object.assign(new Error("Timed out after 1000ms"), {
+      exitNotificationTimedOut: true,
+    });
+    const session = failedSession({
+      adapter,
+      rootPath,
+      state: "running",
+      processExited: true,
+      process: { exitCode: 0, signalCode: null },
+      documents: new Map(),
+      folders: new Set([rootPath]),
+      stop: jasmine.createSpy("old.stop").and.rejectWith(timeout),
+    });
+    manager.sessions.set(manager.keyFor(adapter, rootPath), session);
+    manager.controllerForSession(session, true);
+    spyOn(ServerSession.prototype, "start").and.callFake(async function () {
+      this.state = "running";
+    });
+    spyOn(ServerSession.prototype, "stop").and.callFake(async function () {
+      this.state = "stopped";
+    });
+    spyOn(manager, "reattachAll").and.callFake(async () => {});
+    const notification = spyOn(lumine.notifications, "addError");
+
+    const [replacement] = await manager.restartAdapter(adapter, { reportErrors: true });
+    await flushPromises();
+
+    expect(replacement).not.toBe(session);
+    expect(replacement.state).toBe("running");
+    expect(notification).not.toHaveBeenCalled();
+    expect(manager.getLog("test")).toContain(
+      "Exit notification timed out; continuing restart after process exit",
+    );
+  });
+
   it("keeps the healthy server when preparing its replacement fails", async () => {
     const adapter = {
       id: "test",
