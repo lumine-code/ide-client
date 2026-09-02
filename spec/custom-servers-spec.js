@@ -70,4 +70,22 @@ describe("CustomServers", () => {
     expect(manager.adapters.has("config:gopls")).toBe(false);
     expect(manager.adapters.get("config:stable")).toBe(before);
   });
+
+  it("disposes a watcher whose activation finishes after disposal", async () => {
+    const api = require("lumine");
+    const watcher = { dispose: jasmine.createSpy("dispose") };
+    let resolveWatch;
+    spyOn(api, "watchPath").and.returnValue(
+      new Promise((resolve) => {
+        resolveWatch = resolve;
+      }),
+    );
+
+    const activation = customServers.activate();
+    customServers.dispose();
+    resolveWatch(watcher);
+    await activation;
+
+    expect(watcher.dispose).toHaveBeenCalled();
+  });
 });
