@@ -87,7 +87,7 @@ describe("ide-client session menu", () => {
 
   it("clears the previous query when it reopens", async () => {
     await menu.toggle();
-    menu.serverList.refs.queryEditor.setText("pyright");
+    menu.serverList.getQueryEditor().setText("pyright");
     await menu.toggle();
     await menu.toggle();
     expect(menu.serverList.getQuery()).toBe("");
