@@ -527,13 +527,9 @@ describe("ManagedServers", () => {
       ).toBeRejectedWithError(/Unsupported archive/);
     });
 
-    it("extracts a zip with bsdtar", async () => {
-      if (!available) {
-        pending(
-          `bsdtar is not available on ${process.platform}; the refusal above is the contract`,
-        );
-        return;
-      }
+    const itWithBsdtar = available ? it : () => {};
+
+    itWithBsdtar("extracts a zip with bsdtar", async () => {
       const destination = fs.mkdtempSync(path.join(scratch, "unzip-"));
       const source = fs.mkdtempSync(path.join(scratch, "zip-src-"));
       fs.writeFileSync(path.join(source, "testlang"), "zipped");
