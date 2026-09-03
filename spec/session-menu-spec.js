@@ -90,17 +90,13 @@ describe("ide-client session menu", () => {
   });
 
   it("hosts the list in the view's own panel, so a click outside cancels it", async () => {
-    // The base view cancels on focusout only for a list it knows is visible,
-    // which means the panel has to be the one it built itself.
-    // Truthiness, not `false`: isVisible() is `this.panel && …`, so it answers
-    // undefined until the panel exists.
-    expect(menu.serverList.isVisible()).toBeFalsy();
+    expect(menu.serverListHost.isVisible()).toBe(false);
     await menu.toggle();
-    expect(menu.serverList.isVisible()).toBeTruthy();
-    expect(menu.serverList.getPanel().getItem()).toBe(menu.serverList);
+    expect(menu.serverListHost.isVisible()).toBe(true);
+    expect(menu.serverListHost.getPanel().getItem()).toBe(menu.serverList);
 
-    menu.serverList.cancel();
-    expect(menu.serverList.isVisible()).toBeFalsy();
+    menu.serverListHost.cancel();
+    expect(menu.serverListHost.isVisible()).toBe(false);
   });
 
   it("clears the previous query when it reopens", async () => {
@@ -210,8 +206,8 @@ describe("ide-client session menu", () => {
       await menu.toggle();
       await menu.showDetails(session);
 
-      expect(menu.serverList.isVisible()).toBeFalsy();
-      expect(menu.detailsList.isVisible()).toBeTruthy();
+      expect(menu.serverListHost.isVisible()).toBe(false);
+      expect(menu.detailsListHost.isVisible()).toBe(true);
       expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "pyright Server"]);
       expect(menu.detailsList.getItems().map((item) => item.label)).toEqual([
         "State",
@@ -262,7 +258,7 @@ describe("ide-client session menu", () => {
       expect((await menu.detailsList.confirmSelection()).status).toBe("success");
 
       expect(lumine.clipboard.read()).toBe("basedpyright-langserver --stdio");
-      expect(menu.detailsList.isVisible()).toBeTruthy();
+      expect(menu.detailsListHost.isVisible()).toBe(true);
       expect(menu.detailsList.getElement().querySelector(".status-message").textContent).toBe(
         "Copied Command",
       );
@@ -286,7 +282,7 @@ describe("ide-client session menu", () => {
       main.manager.sessions.set("late:/project", stubSession("starting", "late"));
 
       expect(lumine.workspace.popModal()).toBe(true);
-      expect(menu.serverList.isVisible()).toBeTruthy();
+      expect(menu.serverListHost.isVisible()).toBe(true);
       expect(menu.serverList.getItems().map((item) => item.label)).toEqual([
         "late Server",
         "pyright Server",
@@ -332,7 +328,7 @@ describe("ide-client session menu", () => {
 
       await menu.run(main.manager.restart(first));
 
-      expect(menu.serverList.isVisible()).toBeTruthy();
+      expect(menu.serverListHost.isVisible()).toBe(true);
       expect(lumine.notifications.addError.calls.mostRecent().args[0]).toBe(
         "Language server action failed",
       );

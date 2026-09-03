@@ -23,6 +23,7 @@ describe("ide-client item actions", () => {
   });
 
   it("derives its session actions from the command registrations and the keymap", async () => {
+    await main.sessionMenu.serverListHost.show();
     await list.setItems([
       {
         id: "pyright:/project",
@@ -72,7 +73,9 @@ describe("ide-client item actions", () => {
   });
 
   it("switches the managed-server primary action between install and update", async () => {
-    const managedList = main.getManagedMenu().list;
+    const managedMenu = main.getManagedMenu();
+    await managedMenu.listHost.show();
+    const managedList = managedMenu.list;
     expect(managedList.getSource().mode).toBe("snapshot");
     const selectEntry = async (installed) => {
       await managedList.setItems([
@@ -128,11 +131,14 @@ describe("ide-client item actions", () => {
     spyOn(main.manager, "restart").and.returnValue(Promise.resolve(session));
 
     await main.sessionMenu.toggle();
-    await list.showActions();
+    await main.sessionMenu.serverListHost.showActions();
 
-    const actionElement = lumine.workspace.getElement().querySelector(".select-list-actions");
-    const actionList = actionElement.getModel();
-    expect(actionList.isVisible()).toBe(true);
+    const actionPanel = lumine.workspace
+      .getModalPanels()
+      .find((panel) => panel.getElement().classList.contains("select-list-actions"));
+    const actionList = actionPanel.getItem();
+    const actionElement = actionList.getElement();
+    expect(actionPanel.isVisible()).toBe(true);
     expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "Actions"]);
     expect(actionElement.classList.contains("ide-client-session-menu")).toBe(false);
     expect(actionList.getItems().map(({ command }) => command)).toContain(
@@ -146,7 +152,7 @@ describe("ide-client item actions", () => {
     // Running an action returns to the server list first, so the handler finds
     // the server row it was chosen for still selected.
     expect(main.manager.restart).toHaveBeenCalledWith(session);
-    expect(list.isVisible()).toBeTruthy();
-    expect(actionList.isVisible()).toBeFalsy();
+    expect(main.sessionMenu.serverListHost.isVisible()).toBe(true);
+    expect(actionPanel.isVisible()).toBe(false);
   });
 });
