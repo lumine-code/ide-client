@@ -1,6 +1,15 @@
 describe("ide-client item actions", () => {
   let main, list;
 
+  function nextAction(owner) {
+    return new Promise((resolve) => {
+      const subscription = owner.onDidFinishAction((event) => {
+        subscription.dispose();
+        resolve(event);
+      });
+    });
+  }
+
   beforeEach(async () => {
     jasmine.attachToDOM(lumine.views.getView(lumine.workspace));
     // No activation commands here, so a plain activation resolves; it also
@@ -14,19 +23,17 @@ describe("ide-client item actions", () => {
   });
 
   it("derives its session actions from the command registrations and the keymap", async () => {
-    await list.update({
-      items: [
-        {
-          id: "pyright:/project",
-          label: "pyright Server",
-          detail: "Root · /project",
-          state: "running",
-          session: {},
-        },
-      ],
-    });
+    await list.setItems([
+      {
+        id: "pyright:/project",
+        label: "pyright Server",
+        detail: "Root · /project",
+        state: "running",
+        session: {},
+      },
+    ]);
     await list.selectIndex(0);
-    const actions = list.itemActions();
+    const actions = list.getAvailableActions();
     const byCommand = new Map(actions.map((action) => [action.command, action]));
 
     const restart = byCommand.get("ide-client:restart-server");
@@ -37,8 +44,9 @@ describe("ide-client item actions", () => {
     expect(byCommand.get("ide-client:stop-server").keystrokes).toEqual(["alt-delete"]);
     expect(byCommand.get("ide-client:show-server-log").keystrokes).toEqual(["alt-l"]);
     expect(byCommand.get("ide-client:show-problems").keystrokes).toEqual(["alt-p"]);
-    expect(byCommand.get("ide-client:show-problems").scope).toBe("list");
+    expect(byCommand.get("ide-client:show-problems").context).toBe("dialog");
     expect(byCommand.get("ide-client:show-details").keystrokes).toEqual(["enter"]);
+    expect(byCommand.get("ide-client:show-details").primary).toBe(true);
 
     // Every action explains itself with more than a restated title.
     for (const action of actions) {
@@ -56,29 +64,28 @@ describe("ide-client item actions", () => {
   });
 
   it("keeps only the session-wide action when no server is selected", async () => {
-    await list.update({ items: [] });
+    await list.setItems([]);
 
-    expect(list.itemActions().map((action) => action.command)).toEqual([
+    expect(list.getAvailableActions().map((action) => action.command)).toEqual([
       "ide-client:show-problems",
     ]);
   });
 
   it("switches the managed-server primary action between install and update", async () => {
     const managedList = main.getManagedMenu().list;
+    expect(managedList.getSource().mode).toBe("snapshot");
     const selectEntry = async (installed) => {
-      await managedList.update({
-        items: [
-          {
-            id: "example",
-            label: "Example Server",
-            detail: installed ? "1.0.0 · installed" : "not installed",
-            state: installed ? null : "missing",
-            entry: { adapter: { id: "example" }, installed },
-          },
-        ],
-      });
+      await managedList.setItems([
+        {
+          id: "example",
+          label: "Example Server",
+          detail: installed ? "1.0.0 · installed" : "not installed",
+          state: installed ? null : "missing",
+          entry: { adapter: { id: "example" }, installed },
+        },
+      ]);
       await managedList.selectIndex(0);
-      return new Map(managedList.itemActions().map((action) => [action.command, action]));
+      return new Map(managedList.getAvailableActions().map((action) => [action.command, action]));
     };
 
     let actions = await selectEntry(null);
@@ -87,7 +94,8 @@ describe("ide-client item actions", () => {
       "ide-client:check-server-updates",
     ]);
     expect(actions.get("ide-client:install-server").keystrokes).toEqual(["enter", "alt-i"]);
-    expect(actions.get("ide-client:check-server-updates").scope).toBe("list");
+    expect(actions.get("ide-client:install-server").primary).toBe(true);
+    expect(actions.get("ide-client:check-server-updates").context).toBe("dialog");
 
     actions = await selectEntry("1.0.0");
     expect([...actions.keys()]).toEqual([
@@ -96,9 +104,10 @@ describe("ide-client item actions", () => {
       "ide-client:check-server-updates",
     ]);
     expect(actions.get("ide-client:update-server").keystrokes).toEqual(["enter", "alt-u"]);
+    expect(actions.get("ide-client:update-server").primary).toBe(true);
 
     managedList.selectNone();
-    expect(managedList.itemActions().map((action) => action.command)).toEqual([
+    expect(managedList.getAvailableActions().map((action) => action.command)).toEqual([
       "ide-client:check-server-updates",
     ]);
   });
@@ -119,24 +128,25 @@ describe("ide-client item actions", () => {
     spyOn(main.manager, "restart").and.returnValue(Promise.resolve(session));
 
     await main.sessionMenu.toggle();
-    await list.showItemActions();
+    await list.showActions();
 
-    expect(list.itemActionsList.isVisible()).toBeTruthy();
+    const actionElement = lumine.workspace.getElement().querySelector(".select-list-actions");
+    const actionList = actionElement.getModel();
+    expect(actionList.isVisible()).toBe(true);
     expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "Actions"]);
-    // The actions list wears the package class, so the package keymap resolves
-    // action keystrokes inside it too.
-    expect(list.itemActionsList.element.classList.contains("ide-client-session-menu")).toBe(true);
-
-    const index = list.itemActionsList.items.findIndex(
-      (item) => item.command === "ide-client:restart-server",
+    expect(actionElement.classList.contains("ide-client-session-menu")).toBe(false);
+    expect(actionList.getItems().map(({ command }) => command)).toContain(
+      "ide-client:restart-server",
     );
-    await list.itemActionsList.selectIndex(index);
-    list.itemActionsList.confirmSelection();
+
+    const finished = nextAction(list);
+    lumine.commands.dispatch(actionElement, "ide-client:restart-server");
+    expect((await finished).status).toBe("success");
 
     // Running an action returns to the server list first, so the handler finds
     // the server row it was chosen for still selected.
     expect(main.manager.restart).toHaveBeenCalledWith(session);
     expect(list.isVisible()).toBeTruthy();
-    expect(list.itemActionsList.isVisible()).toBeFalsy();
+    expect(actionList.isVisible()).toBeFalsy();
   });
 });

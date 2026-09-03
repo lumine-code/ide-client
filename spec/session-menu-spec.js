@@ -12,10 +12,14 @@ describe("ide-client session menu", () => {
     kill() {},
   });
 
-  // elementForItem returns a row descriptor, so go through the list to get the
-  // element it actually renders — the same path a real row takes.
-  const render = (item) => menu.serverList.resolveElement(item, {});
-  const renderDetail = (item) => menu.detailsList.resolveElement(item, {});
+  const render = async (item) => {
+    await menu.serverList.setItems([{ id: "rendered-server", session: {}, ...item }]);
+    return menu.serverList.getElement().querySelector("li");
+  };
+  const renderDetail = async (item) => {
+    await menu.detailsList.setItems([item]);
+    return menu.detailsList.getElement().querySelector("li");
+  };
 
   beforeEach(async () => {
     await lumine.packages.activatePackage("ide-client");
@@ -27,8 +31,12 @@ describe("ide-client session menu", () => {
     await lumine.packages.deactivatePackage("ide-client");
   });
 
-  it("puts the state in the trailing block of the primary line", () => {
-    const element = render({ label: "stub Server", detail: "/project", state: "running" });
+  it("puts the state in the trailing block of the primary line", async () => {
+    const element = await render({
+      label: "stub Server",
+      detail: "/project",
+      state: "running",
+    });
     const trailing = element.querySelector(".primary-line > .trailing-block");
     expect(trailing).not.toBe(null);
 
@@ -39,30 +47,40 @@ describe("ide-client session menu", () => {
     expect(element.querySelector(".primary-text").textContent).toBe("stub Server");
   });
 
-  it("renders the state as a themed badge, one variant per state", () => {
-    const badgeFor = (state) =>
-      render({ label: "stub Server", state }).querySelector(".ide-client-session-state");
+  it("renders the state as a themed badge, one variant per state", async () => {
+    const badgeFor = async (state) =>
+      (await render({ label: "stub Server", state })).querySelector(".ide-client-session-state");
 
-    expect([...badgeFor("running").classList]).toEqual([
+    expect([...(await badgeFor("running")).classList]).toEqual([
       "ide-client-session-state",
       "badge",
       "badge-success",
     ]);
-    expect(badgeFor("starting").classList.contains("badge-warning")).toBe(true);
-    expect(badgeFor("stopping").classList.contains("badge-warning")).toBe(true);
-    expect(badgeFor("failed").classList.contains("badge-error")).toBe(true);
+    expect((await badgeFor("starting")).classList.contains("badge-warning")).toBe(true);
+    expect((await badgeFor("stopping")).classList.contains("badge-warning")).toBe(true);
+    expect((await badgeFor("failed")).classList.contains("badge-error")).toBe(true);
     // An idle server gets the plain neutral pill, not a variant.
-    expect([...badgeFor("stopped").classList]).toEqual(["ide-client-session-state", "badge"]);
+    expect([...(await badgeFor("stopped")).classList]).toEqual([
+      "ide-client-session-state",
+      "badge",
+    ]);
   });
 
-  it("renders the root path as a second line the theme dims", () => {
-    const element = render({ label: "stub Server", detail: "/project", state: "running" });
+  it("renders the root path as a second line the theme dims", async () => {
+    const element = await render({
+      label: "stub Server",
+      detail: "/project",
+      state: "running",
+    });
     expect(element.classList.contains("two-lines")).toBe(true);
     expect(element.querySelector(".secondary-line").textContent).toBe("/project");
   });
 
-  it("puts a detail's value in the trailing block, so the values line up", () => {
-    const element = renderDetail({ label: "Command", value: "pyright-langserver --stdio" });
+  it("puts a detail's value in the trailing block, so the values line up", async () => {
+    const element = await renderDetail({
+      label: "Command",
+      value: "pyright-langserver --stdio",
+    });
     expect(element.querySelector(".primary-text").textContent).toBe("Command");
 
     // The value carries its own class: the trailing block is floated and would
@@ -182,9 +200,9 @@ describe("ide-client session menu", () => {
     it("routes a confirmed server row into showDetails", async () => {
       spyOn(menu, "showDetails");
       await menu.toggle();
-      expect(menu.serverList.props.items.length).toBe(1);
+      expect(menu.serverList.getItemCount()).toBe(1);
 
-      menu.serverList.confirmSelection();
+      expect((await menu.serverList.confirmSelection()).status).toBe("success");
       expect(menu.showDetails).toHaveBeenCalledWith(session);
     });
 
@@ -195,7 +213,7 @@ describe("ide-client session menu", () => {
       expect(menu.serverList.isVisible()).toBeFalsy();
       expect(menu.detailsList.isVisible()).toBeTruthy();
       expect(lumine.workspace.getModalTrail()).toEqual(["Servers", "pyright Server"]);
-      expect(menu.detailsList.props.items.map((item) => item.label)).toEqual([
+      expect(menu.detailsList.getItems().map((item) => item.label)).toEqual([
         "State",
         "Scope",
         "Server",
@@ -239,20 +257,24 @@ describe("ide-client session menu", () => {
       await menu.toggle();
       await menu.showDetails(session);
 
-      const index = menu.detailsList.items.findIndex((item) => item.label === "Command");
-      await menu.detailsList.selectIndex(index);
-      // Through the list's own wiring, but awaited: `confirmSelection` drops
-      // what the handler returns, so the render would still be pending here.
-      await menu.detailsList.props.didConfirmSelection(menu.detailsList.getSelectedItem());
+      const command = menu.detailsList.getItems().find((item) => item.label === "Command");
+      await menu.detailsList.selectItem(command);
+      expect((await menu.detailsList.confirmSelection()).status).toBe("success");
 
       expect(lumine.clipboard.read()).toBe("basedpyright-langserver --stdio");
       expect(menu.detailsList.isVisible()).toBeTruthy();
-      expect(menu.detailsList.refs.statusMessage.textContent).toBe("Copied Command");
+      expect(menu.detailsList.getElement().querySelector(".status-message").textContent).toBe(
+        "Copied Command",
+      );
 
       // It takes itself down, and the copy hint is still underneath.
       advanceClock(2000);
-      await conditionPromise(() => Boolean(menu.detailsList.refs.infoMessage));
-      expect(menu.detailsList.refs.infoMessage.textContent).toBe("Confirm a row to copy its value");
+      await conditionPromise(() =>
+        Boolean(menu.detailsList.getElement().querySelector(".info-message")),
+      );
+      expect(menu.detailsList.getElement().querySelector(".info-message").textContent).toBe(
+        "Confirm a row to copy its value",
+      );
     });
 
     it("returns to a freshly built server list on back navigation", async () => {
@@ -265,7 +287,7 @@ describe("ide-client session menu", () => {
 
       expect(lumine.workspace.popModal()).toBe(true);
       expect(menu.serverList.isVisible()).toBeTruthy();
-      expect(menu.serverList.props.items.map((item) => item.label)).toEqual([
+      expect(menu.serverList.getItems().map((item) => item.label)).toEqual([
         "late Server",
         "pyright Server",
       ]);
@@ -290,15 +312,17 @@ describe("ide-client session menu", () => {
       spyOn(main.manager, "restart").and.returnValue(Promise.resolve(second));
       await menu.serverList.selectIndex(1);
 
-      lumine.commands.dispatch(menu.serverList.element, "ide-client:restart-server");
+      expect((await menu.serverList.runAction("ide-client:restart-server")).status).toBe("success");
       expect(main.manager.restart).toHaveBeenCalledWith(second);
 
       spyOn(main.manager, "disconnect").and.returnValue(Promise.resolve());
-      lumine.commands.dispatch(menu.serverList.element, "ide-client:stop-server");
+      expect((await menu.serverList.runAction("ide-client:stop-server")).status).toBe("success");
       expect(main.manager.disconnect).toHaveBeenCalledWith(second);
 
       spyOn(main, "showLogForAdapter").and.returnValue(Promise.resolve());
-      lumine.commands.dispatch(menu.serverList.element, "ide-client:show-server-log");
+      expect((await menu.serverList.runAction("ide-client:show-server-log")).status).toBe(
+        "success",
+      );
       expect(main.showLogForAdapter).toHaveBeenCalledWith("zeta");
     });
 
@@ -324,10 +348,7 @@ describe("ide-client session menu", () => {
       main.manager.sessions.set("zeta:/project", replacement);
       await menu.refresh();
 
-      expect(menu.serverList.props.items.map((item) => item.state)).toEqual([
-        "running",
-        "starting",
-      ]);
+      expect(menu.serverList.getItems().map((item) => item.state)).toEqual(["running", "starting"]);
       expect(menu.serverList.getSelectedItem().session).toBe(replacement);
     });
 
