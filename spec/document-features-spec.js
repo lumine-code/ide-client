@@ -135,6 +135,22 @@ describe("DocumentFeatures", () => {
     ]);
   });
 
+  it("reports a command request failure without leaving an unhandled rejection", async () => {
+    const session = makeSession(() => Promise.reject(new Error("server busy")));
+    features = new DocumentFeatures(makeManager(session));
+    const warning = spyOn(lumine.notifications, "addWarning");
+
+    expect(await features.foldRanges(editor)).toBe(false);
+
+    expect(warning).toHaveBeenCalledWith(
+      "Language server request 'textDocument/foldingRange' failed.",
+      {
+        detail: "server busy",
+        dismissable: true,
+      },
+    );
+  });
+
   it("expands a selection to the next parent selection range", async () => {
     const session = makeSession((method) =>
       method === "textDocument/selectionRange"

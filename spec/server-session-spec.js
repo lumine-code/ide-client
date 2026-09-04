@@ -640,6 +640,13 @@ describe("ServerSession against a fake server", () => {
     ]);
 
     expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "workspace-1" }]);
+
+    session.workspaceDiagnosticResultIds.clear();
+    session.documents.set(C.uriKey(uri), { uri, version: 2, subscriptions: { dispose() {} } });
+    session.processWorkspaceDiagnosticItems([
+      { uri, version: 1, kind: "full", resultId: "stale-workspace", items: [] },
+    ]);
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([]);
   });
 
   it("does not pull diagnostics while the adapter feature is disabled", async () => {
