@@ -90,6 +90,20 @@ describe("ide-client package", () => {
       ]);
     });
 
+    it("offers Install for an adapter that manages its server with an install hook", () => {
+      const adapter = adapterFor(undefined);
+      adapter.managedServerDisplayName = "Missing Toolchain";
+      adapter.installServer = async () => ({ binary: "missing-tool" });
+      service.registerAdapter(adapter);
+
+      const notification = service.reportMissingServer("ide-missing");
+
+      expect(notification.getOptions().buttons.map(({ text }) => text)).toEqual([
+        "Install Missing Toolchain",
+        "Never Ask Again",
+      ]);
+    });
+
     it("offers only the opt-out when there is nowhere to install from", () => {
       service.registerAdapter(adapterFor(undefined));
       const notification = service.reportMissingServer("ide-missing");

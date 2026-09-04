@@ -332,7 +332,7 @@ if (!launch) {
 }
 ```
 
-It fires **once per window per adapter**, adds an **Install** button when the adapter declares `managedServer`, and always adds **Never Ask Again**. Either button closes the notification — a notification button dismisses nothing on its own, and both answers here are final, so a banner still asking the question is the only thing on screen saying whether the click registered. It is a warning, not an error: an adapter with no server is not broken, it simply has nothing to run, and several such packages installed at once otherwise means a stack of red banners for tools the user may never have wanted.
+It fires **once per window per adapter**, adds an **Install** button when the adapter declares `managedServer` or implements `installServer`, and always adds **Never Ask Again**. Either button closes the notification — a notification button dismisses nothing on its own, and both answers here are final, so a banner still asking the question is the only thing on screen saying whether the click registered. It is a warning, not an error: an adapter with no server is not broken, it simply has nothing to run, and several such packages installed at once otherwise means a stack of red banners for tools the user may never have wanted.
 
 Never Ask Again writes `false` to `<adapter.id>.notifyWhenMissing`, so **declare that setting in your `configSchema`** or the user has no way to turn it back on:
 

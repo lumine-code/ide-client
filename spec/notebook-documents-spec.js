@@ -369,6 +369,83 @@ describe("NotebookDocuments against a fake server", () => {
     subscription.dispose();
   });
 
+  it("versions one logical structure change once across two server projections", async () => {
+    const scopes = ["text.plain.null-grammar", "source.js"];
+    registerFakeAdapter(
+      { capabilities: { notebookDocumentSync: RUFF_SYNC } },
+      { id: "fake-python", displayName: "Python Server", grammarScopes: scopes },
+    );
+    registerFakeAdapter(
+      {
+        capabilities: {
+          notebookDocumentSync: {
+            notebookSelector: [{ cells: [{ language: "*" }] }],
+            save: false,
+          },
+        },
+      },
+      { id: "fake-all", displayName: "All Cells Server", grammarScopes: scopes },
+    );
+    const a = buildCellEditor("a\n");
+    const b = buildCellEditor("b\n");
+    const c = buildCellEditor("c\n");
+    spyOn(b, "getGrammar").and.returnValue({ scopeName: "source.js" });
+    const cellA = { id: "c1", kind: "code", editor: a };
+    const cellB = { id: "c2", kind: "code", editor: b };
+    const cellC = { id: "c3", kind: "code", editor: c };
+    const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA] });
+    await bridge.attached;
+    const byId = (id) => manager.allSessions().find((session) => session.adapter.id === id);
+    const python = byId("fake-python");
+    const all = byId("fake-all");
+    const record = [...notebooks.records][0];
+
+    // JavaScript is outside the Python server's projection, but adding it is
+    // still one logical notebook change. Only the all-cells server advances.
+    await bridge.updateCells([cellA, cellB]);
+    await until(async () =>
+      (await all.request("test/getReceived")).some(
+        ({ method }) => method === "notebookDocument/didChange",
+      ),
+    );
+    expect(record.version).toBe(2);
+    expect(record.versionFor(python)).toBe(1);
+    expect(record.versionFor(all)).toBe(2);
+
+    // Adding a Python cell changes both projections. Both notifications carry
+    // the same next version rather than advancing once per session.
+    await bridge.updateCells([cellA, cellB, cellC]);
+    await until(async () => {
+      const messages = await Promise.all(
+        [python, all].map((session) => session.request("test/getReceived")),
+      );
+      return messages.every((items) =>
+        items.some(
+          ({ method, params }) =>
+            method === "notebookDocument/didChange" &&
+            params.notebookDocument.version === record.version,
+        ),
+      );
+    });
+    expect(record.version).toBe(3);
+    expect(record.versionFor(python)).toBe(3);
+    expect(record.versionFor(all)).toBe(3);
+
+    const uri = bridge.uriForCell("c1");
+    const diagnostic = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      message: "problem",
+    };
+    expect(manager.publishDiagnostics(python, { uri, version: 3, diagnostics: [diagnostic] })).toBe(
+      true,
+    );
+    expect(manager.publishDiagnostics(all, { uri, version: 3, diagnostics: [diagnostic] })).toBe(
+      true,
+    );
+    expect(manager.diagnosticsFor(python, uri)).toEqual([diagnostic]);
+    expect(manager.diagnosticsFor(all, uri)).toEqual([diagnostic]);
+  });
+
   it("sends didSave only to servers whose sync options ask for it", async () => {
     registerFakeAdapter({
       capabilities: { notebookDocumentSync: { ...RUFF_SYNC, save: false } },

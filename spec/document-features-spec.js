@@ -106,6 +106,18 @@ describe("DocumentFeatures", () => {
     expect(lumine.shell.openExternal).not.toHaveBeenCalled();
   });
 
+  it("reports a failed lazy document-link resolution without rejecting the click", async () => {
+    const session = makeSession(() => Promise.reject(new Error("link expired")));
+    features = new DocumentFeatures(makeManager(session));
+    const warning = spyOn(lumine.notifications, "addWarning");
+
+    expect(await features.followDocumentLink(session, { data: 7 }, true)).toBe(false);
+    expect(warning).toHaveBeenCalledWith("Language server request 'documentLink/resolve' failed.", {
+      detail: "link expired",
+      dismissable: true,
+    });
+  });
+
   it("folds every range returned by the active server", async () => {
     const session = makeSession((method) =>
       method === "textDocument/foldingRange"

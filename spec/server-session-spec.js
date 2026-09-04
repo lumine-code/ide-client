@@ -76,7 +76,7 @@ describe("ServerSession against a fake server", () => {
     });
     expect(initialize.params.capabilities.workspace.workspaceEdit.failureHandling).toBe("abort");
     expect(initialize.params.capabilities.textDocument.diagnostic).toEqual({
-      dynamicRegistration: false,
+      dynamicRegistration: true,
       relatedDocumentSupport: true,
     });
     expect(initialize.params.capabilities.textDocument.documentLink.tooltipSupport).toBe(true);
@@ -607,6 +607,115 @@ describe("ServerSession against a fake server", () => {
     expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "dynamic" }]);
   });
 
+  it("uses a dynamic diagnostic identifier and clears its report when the document closes", async () => {
+    const filePath = path.join(tempDir, "dynamic-document-error.js");
+    const uri = C.pathToUri(filePath);
+    fs.writeFileSync(filePath, "bad();\n");
+    const diagnostic = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+      message: "bad call",
+    };
+    const session = await startSession({
+      capabilities: { textDocumentSync: 2 },
+      responses: {
+        "textDocument/diagnostic": { kind: "full", resultId: "dynamic-1", items: [diagnostic] },
+      },
+    });
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 992,
+      method: "client/registerCapability",
+      params: {
+        registrations: [
+          {
+            id: "dynamic-document-diagnostics",
+            method: "textDocument/diagnostic",
+            registerOptions: { identifier: "dynamic-document" },
+          },
+        ],
+      },
+    });
+
+    await until(() => manager.diagnosticsFor(session, uri).length === 1);
+    const pull = (await receivedMessages(session)).find(
+      ({ method, params }) =>
+        method === "textDocument/diagnostic" && params.identifier === "dynamic-document",
+    );
+    expect(pull).toBeDefined();
+
+    editor.destroy();
+    expect(manager.diagnosticsFor(session, uri)).toEqual([]);
+  });
+
+  it("does not reuse diagnostic result ids after a dynamic provider is replaced", async () => {
+    const filePath = path.join(tempDir, "dynamic-provider-change.js");
+    const uri = C.pathToUri(filePath);
+    fs.writeFileSync(filePath, "bad();\n");
+    const session = await startSession({
+      capabilities: { textDocumentSync: 2 },
+      responseSequences: {
+        "textDocument/diagnostic": [
+          { kind: "full", resultId: "provider-one-result", items: [] },
+          { kind: "full", resultId: "provider-two-result", items: [] },
+        ],
+      },
+    });
+    const editor = await lumine.workspace.open(filePath);
+    await session.openEditor(editor);
+    const registration = (id, identifier) => ({
+      jsonrpc: "2.0",
+      id,
+      method: "client/registerCapability",
+      params: {
+        registrations: [
+          {
+            id: `diagnostics-${identifier}`,
+            method: "textDocument/diagnostic",
+            registerOptions: { identifier },
+          },
+        ],
+      },
+    });
+    await session.request("test/notify", registration(993, "provider-one"));
+    await until(() =>
+      [...session.documents.values()].some(
+        (document) => document.diagnosticResultId === "provider-one-result",
+      ),
+    );
+    session.workspaceDiagnosticResultIds.set("old", { uri: "file:///old", value: "old" });
+    const pushed = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+      message: "pushed independently",
+    };
+    manager.publishDiagnostics(session, { uri, diagnostics: [pushed] });
+
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 994,
+      method: "client/unregisterCapability",
+      params: {
+        unregisterations: [{ id: "diagnostics-provider-one", method: "textDocument/diagnostic" }],
+      },
+    });
+    expect(manager.diagnosticsFor(session, uri)).toEqual([pushed]);
+    await session.request("test/notify", registration(995, "provider-two"));
+
+    await until(async () =>
+      (await receivedMessages(session)).some(
+        ({ method, params }) =>
+          method === "textDocument/diagnostic" && params.identifier === "provider-two",
+      ),
+    );
+    const second = (await receivedMessages(session)).find(
+      ({ method, params }) =>
+        method === "textDocument/diagnostic" && params.identifier === "provider-two",
+    );
+    expect(second.params.previousResultId).toBeUndefined();
+    expect(session.workspaceDiagnosticResultIds.size).toBe(0);
+  });
+
   it("pulls workspace diagnostics when they are enabled in any grammar scope", () => {
     const adapter = {
       id: "ide-a",
@@ -861,6 +970,19 @@ describe("ServerSession against a fake server", () => {
     ).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toBe("source");
     expect(fs.readFileSync(ignored, "utf8")).toBe("ignored");
+  });
+
+  it("deletes an empty directory without requiring recursive deletion", async () => {
+    const directory = path.join(tempDir, "empty-directory");
+    fs.mkdirSync(directory);
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const applied = await manager.applyWorkspaceEdit({
+      documentChanges: [{ kind: "delete", uri: C.pathToUri(directory) }],
+    });
+
+    expect(applied).toBe(true);
+    expect(fs.existsSync(directory)).toBe(false);
   });
 
   it("applies text edits after creating their target", async () => {
