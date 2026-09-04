@@ -229,6 +229,35 @@ describe("ide-client package", () => {
     expect(callbacks.size).toBe(0);
   });
 
+  it("hands the neutral file-operation executor to the manager", () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    const executor = { prepare() {} };
+    const registration = main.consumeFileOperationsExecutor(executor);
+
+    expect(main.manager.fileOperationsExecutor).toBe(executor);
+    registration.dispose();
+    expect(main.manager.fileOperationsExecutor).toBe(null);
+  });
+
+  it("receives the bundled file-operation executor through package services", async () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    await lumine.packages.activatePackage("file-operations");
+    expect(typeof main.manager.fileOperationsExecutor?.prepare).toBe("function");
+    expect(typeof main.manager.fileOperationsExecutor?.inspect).toBe("function");
+    expect(typeof main.manager.fileOperationsExecutor?.onWillExecuteStep).toBe("function");
+    expect(typeof main.manager.fileOperationsExecutor?.onDidExecuteStep).toBe("function");
+    expect(
+      await main.manager.fileOperationsExecutor.inspect([
+        __filename,
+        `${__filename}.missing-file-operation-target`,
+      ]),
+    ).toEqual([
+      { path: __filename, status: "file" },
+      { path: `${__filename}.missing-file-operation-target`, status: "missing" },
+    ]);
+    await lumine.packages.deactivatePackage("file-operations");
+  });
+
   it("takes only the transient half of busy-signal", () => {
     const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const provider = { add() {}, remove() {}, changeTitle() {}, clear() {}, dispose() {} };

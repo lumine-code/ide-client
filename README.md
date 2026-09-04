@@ -7,7 +7,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 ## Features
 
 - **Sessions**: starts every matching adapter lazily, scoped to a project root or the workspace, and safely serializes restarts and shutdown.
-- **Protocol lifecycle**: negotiates document and notebook synchronization, dynamic capabilities, workspace folders, watched files, file operations, progress and three JSON-RPC transports.
+- **Protocol lifecycle**: negotiates document and notebook synchronization, dynamic capabilities, workspace folders, watched files, file-operation notifications, progress and three JSON-RPC transports.
 - **Language features**: supplies completions, symbols, hover, signatures, references, document links, folding, selection ranges, linked editing, colors, formatting, rename, code actions, inlay hints, code lens and semantic tokens.
 - **Diagnostics**: combines pushed, per-document pull and workspace pull reports and forwards their current state to the linter package.
 - **Feature routing**: merges answers where useful and lets adapter switches choose one of several servers where only one result can apply.
@@ -72,6 +72,8 @@ consumeIdeClient(ideClient) {
 
 Commands are spawned directly with `shell: false`; arguments belong in `args`. The default session scope is one server per project root; a server whose capabilities declare multi-root support is handed further folders instead of being started again, so `sessionScope: "workspace"` is needed only for servers with no notion of a root. Editors without a file path are not attached to language servers. The complete public shapes are documented in `lib/main.d.ts`.
 
+Text edits from `WorkspaceEdit` are applied to versioned editor buffers by this package. Filesystem inspection and resource operations are delegated to the bundled `file-operations` infrastructure instead; `ide-client` never falls back to reading or mutating paths itself. The executor's lifecycle lets the hub retarget buffers and replace private staging noise with durable LSP file events, and a session advertises create, rename and delete support only when that executor was available during initialize.
+
 ## Configuration
 
 Any language server can be wired without an adapter package through `language-servers.json` in the configuration directory (open it with `ide-client:open-custom-servers-file`). Each entry needs a `command` and grammar `scopes`; `args`, `languageId`, `sessionScope`, `transport`, `env`, `initializationOptions`, `settings`, and `features` are optional. `settings` feeds both `workspace/configuration` lookups and the configuration push after startup, and `features` switches individual capabilities off — an adapter package holds the same switches in its own settings, but a custom server has no settings page to put them on:
@@ -127,6 +129,7 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `inlay-hints.provider`: provided to the inlay hints UI to serve the labels a server computes for the visible rows.
 - `semantic-tokens.provider`: provided to the semantic tokens UI to serve the server's classification of the identifiers.
 - `hyperclick.provider`: provided to hyperclick to follow language-server document links, resolving lazy targets only when clicked.
+- `file-operations.executor`: consumed to preflight and execute the create, rename and delete steps in a server `WorkspaceEdit`.
 - `linter.registry`: consumed to push server diagnostics into the linter UI, one delegate per server.
 - `busy-signal`: consumed to surface server work-done progress on the busy indicator.
 - `status-bar`: consumed to show the running servers in an item that opens the server list.

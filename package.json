@@ -154,6 +154,11 @@
     }
   },
   "consumedServices": {
+    "file-operations.executor": {
+      "versions": {
+        "^1.0.0": "consumeFileOperationsExecutor"
+      }
+    },
     "linter.registry": {
       "versions": {
         "^1.0.0": "consumeLinterRegistry"

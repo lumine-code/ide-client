@@ -48,6 +48,128 @@ describe("ServerSession against a fake server", () => {
 
   const receivedMessages = (session) => session.request("test/getReceived");
 
+  const installFileOperationsExecutor = () => {
+    const executor = {
+      plans: [],
+      inspect: jasmine.createSpy("inspect file-operation paths").and.callFake(async (paths) =>
+        Object.freeze(
+          paths.map((filePath) => {
+            let status = "missing";
+            try {
+              status = fs.lstatSync(filePath).isDirectory() ? "directory" : "file";
+            } catch (error) {
+              if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+            }
+            return Object.freeze({ path: filePath, status });
+          }),
+        ),
+      ),
+      prepare: jasmine.createSpy("prepare file operations").and.callFake(async (operations) => {
+        const virtual = new Map();
+        const keyFor = (filePath) =>
+          process.platform === "win32"
+            ? path.resolve(filePath).toLowerCase()
+            : path.resolve(filePath);
+        const exists = (filePath) => {
+          const key = keyFor(filePath);
+          return virtual.has(key) ? virtual.get(key) : fs.existsSync(filePath);
+        };
+        const setExists = (filePath, value) => virtual.set(keyFor(filePath), value);
+        const descriptions = operations.map((operation) => {
+          if (operation.kind === "create") {
+            const skip =
+              exists(operation.path) &&
+              !operation.options?.overwrite &&
+              operation.options?.ignoreIfExists;
+            if (!skip) setExists(operation.path, true);
+            return Object.freeze({ status: skip ? "skip" : "apply" });
+          }
+          if (operation.kind === "rename") {
+            const skip =
+              exists(operation.newPath) &&
+              !operation.options?.overwrite &&
+              operation.options?.ignoreIfExists;
+            if (!skip) {
+              setExists(operation.oldPath, false);
+              setExists(operation.newPath, true);
+            }
+            return Object.freeze({ status: skip ? "skip" : "apply" });
+          }
+          const skip = !exists(operation.path) && operation.options?.ignoreIfNotExists;
+          if (!skip) setExists(operation.path, false);
+          return Object.freeze({ status: skip ? "skip" : "apply" });
+        });
+        let index = 0;
+        const executeNext = jasmine
+          .createSpy("execute next file operation")
+          .and.callFake(async () => {
+            const operationIndex = index++;
+            const operation = operations[operationIndex];
+            if (descriptions[operationIndex].status === "skip") {
+              return { status: "skipped", effects: [] };
+            }
+            if (operation.kind === "create") {
+              if (fs.existsSync(operation.path) && !operation.options?.overwrite) {
+                if (operation.options?.ignoreIfExists) return { status: "skipped", effects: [] };
+                return { status: "failed", reason: "target exists", effects: [] };
+              }
+              fs.mkdirSync(path.dirname(operation.path), { recursive: true });
+              fs.writeFileSync(operation.path, "");
+              return {
+                status: "applied",
+                effects: [{ kind: "create", path: operation.path, isDirectory: false }],
+              };
+            }
+            if (operation.kind === "rename") {
+              if (fs.existsSync(operation.newPath)) {
+                if (!operation.options?.overwrite) {
+                  if (operation.options?.ignoreIfExists) return { status: "skipped", effects: [] };
+                  return { status: "failed", reason: "target exists", effects: [] };
+                }
+                fs.rmSync(operation.newPath, { recursive: true, force: true });
+              }
+              const isDirectory = fs.statSync(operation.oldPath).isDirectory();
+              fs.renameSync(operation.oldPath, operation.newPath);
+              return {
+                status: "applied",
+                effects: [
+                  {
+                    kind: "rename",
+                    oldPath: operation.oldPath,
+                    newPath: operation.newPath,
+                    isDirectory,
+                  },
+                ],
+              };
+            }
+            if (operation.kind === "delete") {
+              if (!fs.existsSync(operation.path)) {
+                if (operation.options?.ignoreIfNotExists) return { status: "skipped", effects: [] };
+                return { status: "failed", reason: "target is missing", effects: [] };
+              }
+              const isDirectory = fs.statSync(operation.path).isDirectory();
+              if (isDirectory && !operation.options?.recursive) fs.rmdirSync(operation.path);
+              else fs.rmSync(operation.path, { recursive: true, force: false });
+              return {
+                status: "applied",
+                effects: [{ kind: "delete", path: operation.path, isDirectory }],
+              };
+            }
+            return { status: "failed", reason: "unknown operation", effects: [] };
+          });
+        const plan = {
+          describe: () => Object.freeze(descriptions),
+          executeNext,
+          dispose: jasmine.createSpy("dispose file operation plan"),
+        };
+        executor.plans.push(plan);
+        return { status: "ready", plan };
+      }),
+    };
+    manager.setFileOperationsExecutor(executor);
+    return executor;
+  };
+
   beforeEach(() => {
     // Real timers and Date.now: these specs wait on child-process I/O.
     jasmine.useRealClock();
@@ -75,6 +197,9 @@ describe("ServerSession against a fake server", () => {
       valueSet: [1, 2],
     });
     expect(initialize.params.capabilities.workspace.workspaceEdit.failureHandling).toBe("abort");
+    expect(
+      initialize.params.capabilities.workspace.workspaceEdit.resourceOperations,
+    ).toBeUndefined();
     expect(initialize.params.capabilities.textDocument.diagnostic).toEqual({
       dynamicRegistration: true,
       relatedDocumentSupport: true,
@@ -120,6 +245,43 @@ describe("ServerSession against a fake server", () => {
     const initialize = received.find((message) => message.method === "initialize");
     expect(initialize.params.capabilities.textDocument.hover.contentFormat).toEqual(["markdown"]);
     expect(initialize.params.capabilities.workspace.applyEdit).toBe(true);
+  });
+
+  it("advertises resource operations only while their executor is available", async () => {
+    installFileOperationsExecutor();
+    const session = await startSession();
+    const initialize = (await receivedMessages(session)).find(
+      (message) => message.method === "initialize",
+    );
+    expect(initialize.params.capabilities.workspace.workspaceEdit.resourceOperations).toEqual([
+      "create",
+      "rename",
+      "delete",
+    ]);
+  });
+
+  it("returns the detailed resource failure to workspace/applyEdit", async () => {
+    const session = await startSession();
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 996,
+      method: "workspace/applyEdit",
+      params: {
+        edit: {
+          documentChanges: [
+            { kind: "create", uri: C.pathToUri(path.join(tempDir, "from-server.js")) },
+          ],
+        },
+      },
+    });
+
+    await until(async () => (await receivedMessages(session)).some(({ id }) => id === 996));
+    const response = (await receivedMessages(session)).find(({ id }) => id === 996);
+    expect(response.result).toEqual({
+      applied: false,
+      failureReason: "File operation service is unavailable.",
+      failedChange: 0,
+    });
   });
 
   it("pushes workspace configuration after the handshake", async () => {
@@ -905,7 +1067,7 @@ describe("ServerSession against a fake server", () => {
   });
 
   it("reports a workspace edit as failed when its target cannot be resolved", async () => {
-    const applied = await manager.applyWorkspaceEdit({
+    const result = await manager.applyWorkspaceEditDetailed({
       changes: {
         "untitled:missing": [
           {
@@ -915,10 +1077,675 @@ describe("ServerSession against a fake server", () => {
         ],
       },
     });
-    expect(applied).toBe(false);
+    expect(result.applied).toBe(false);
+  });
+
+  it("omits failedChange for the unordered changes-map form", async () => {
+    const result = await manager.applyWorkspaceEditDetailed({
+      changes: {
+        "untitled:missing": [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            newText: "lost",
+          },
+        ],
+      },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toContain("Cannot resolve workspace edit target");
+    expect(result.failedChange).toBeUndefined();
+  });
+
+  it("rejects a mixed edit before touching text when the file executor is unavailable", async () => {
+    const filePath = path.join(tempDir, "untouched.js");
+    fs.writeFileSync(filePath, "original\n");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const created = C.pathToUri(path.join(tempDir, "created.js"));
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        {
+          textDocument: { uri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } },
+              newText: "changed",
+            },
+          ],
+        },
+        { kind: "create", uri: created },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "File operation service is unavailable.",
+      failedChange: 1,
+    });
+    expect(editor.getText()).toBe("original\n");
+    expect(fs.existsSync(C.uriToPath(created))).toBe(false);
+  });
+
+  it("maps a file preflight failure back to the original documentChanges index", async () => {
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({
+        status: "failed",
+        failedOperation: 1,
+        reason: "second resource failed",
+      }),
+    });
+    const textPath = path.join(tempDir, "index-map.js");
+    fs.writeFileSync(textPath, "text\n");
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "create", uri: C.pathToUri(path.join(tempDir, "first.js")) },
+        {
+          textDocument: { uri: C.pathToUri(textPath), version: null },
+          edits: [],
+        },
+        { kind: "delete", uri: C.pathToUri(path.join(tempDir, "missing.js")) },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "second resource failed",
+      failedChange: 2,
+    });
+  });
+
+  it("disposes a file plan whose opaque description is invalid", async () => {
+    const dispose = jasmine.createSpy("dispose");
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({
+        status: "ready",
+        plan: {
+          describe: () => [null],
+          executeNext: jasmine.createSpy("executeNext"),
+          dispose,
+        },
+      }),
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "create", uri: C.pathToUri(path.join(tempDir, "invalid-plan.txt")) },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "File operation service returned an invalid plan description.",
+      failedChange: 0,
+    });
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it("reports an earlier invalid text change before a later resource failure", async () => {
+    const prepare = jasmine.createSpy("prepare").and.resolveTo({
+      status: "failed",
+      failedOperation: 0,
+      reason: "later resource failed",
+    });
+    manager.setFileOperationsExecutor({ prepare });
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { textDocument: { uri: C.pathToUri(path.join(tempDir, "invalid.txt")) } },
+        { kind: "delete", uri: C.pathToUri(path.join(tempDir, "missing.txt")) },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "Invalid TextDocumentEdit",
+      failedChange: 0,
+    });
+    expect(prepare).toHaveBeenCalled();
+  });
+
+  it("reports an earlier missing text path before a later resource failure", async () => {
+    const missingText = path.join(tempDir, "missing-before-resource.txt");
+    manager.setFileOperationsExecutor({
+      inspect: jasmine
+        .createSpy("inspect")
+        .and.resolveTo([{ path: missingText, status: "missing" }]),
+      prepare: jasmine.createSpy("prepare").and.resolveTo({
+        status: "failed",
+        failedOperation: 0,
+        reason: "later resource failed",
+      }),
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { textDocument: { uri: C.pathToUri(missingText), version: null }, edits: [] },
+        { kind: "delete", uri: C.pathToUri(path.join(tempDir, "also-missing.txt")) },
+      ],
+    });
+
+    expect(result.failureReason).toContain("does not exist");
+    expect(result.failedChange).toBe(0);
+  });
+
+  it("reports an earlier stale text change before a later resource failure", async () => {
+    const filePath = path.join(tempDir, "already-stale.txt");
+    fs.writeFileSync(filePath, "stale");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const document = { editor, uri, version: 2 };
+    const session = { documents: new Map([[C.uriKey(uri), document]]) };
+    const prepare = jasmine.createSpy("prepare").and.resolveTo({
+      status: "failed",
+      failedOperation: 0,
+      reason: "later resource failed",
+    });
+    manager.setFileOperationsExecutor({ prepare });
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { textDocument: { uri, version: 1 }, edits: [] },
+          { kind: "delete", uri: C.pathToUri(path.join(tempDir, "missing.txt")) },
+        ],
+      },
+      undefined,
+      session,
+    );
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: `Refusing a stale workspace edit for '${uri}': document version changed`,
+      failedChange: 0,
+    });
+    expect(prepare).toHaveBeenCalled();
+  });
+
+  it("prevalidates stale text untouched by an earlier resource operation", async () => {
+    const filePath = path.join(tempDir, "unrelated-stale.txt");
+    fs.writeFileSync(filePath, "stale");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const document = { editor, uri, version: 2 };
+    const session = { documents: new Map([[C.uriKey(uri), document]]) };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({
+        status: "failed",
+        failedOperation: 1,
+        reason: "last resource failed",
+      }),
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "create", uri: C.pathToUri(path.join(tempDir, "created-first.txt")) },
+          { textDocument: { uri, version: 1 }, edits: [] },
+          { kind: "delete", uri: C.pathToUri(path.join(tempDir, "missing-last.txt")) },
+        ],
+      },
+      undefined,
+      session,
+    );
+
+    expect(result.failureReason).toContain("stale workspace edit");
+    expect(result.failedChange).toBe(1);
+  });
+
+  it("stops a prepared edit if the file operation service disappears", async () => {
+    installFileOperationsExecutor();
+    const source = path.join(tempDir, "service-source.js");
+    const target = path.join(tempDir, "service-target.js");
+    fs.writeFileSync(source, "source\n");
+    spyOn(lumine.window, "confirm").and.callFake(async () => {
+      manager.setFileOperationsExecutor(null);
+      return 0;
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "File operation service became unavailable.",
+      failedChange: 0,
+    });
+    expect(fs.existsSync(source)).toBe(true);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it("rechecks a versioned text step after an awaited file operation", async () => {
+    let releaseExecution;
+    let markExecuting;
+    const executing = new Promise((resolve) => (markExecuting = resolve));
+    const gate = new Promise((resolve) => (releaseExecution = resolve));
+    const plan = {
+      describe: () => [{ status: "apply" }],
+      executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
+        markExecuting();
+        await gate;
+        return { status: "skipped", effects: [] };
+      }),
+      dispose: jasmine.createSpy("dispose"),
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+    const filePath = path.join(tempDir, "version-during-resource.js");
+    fs.writeFileSync(filePath, "current\n");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const document = { editor, uri, version: 1 };
+    const session = { documents: new Map([[C.uriKey(uri), document]]) };
+
+    const applying = manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "create", uri: C.pathToUri(path.join(tempDir, "unrelated.js")) },
+          {
+            textDocument: { uri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 7 } },
+                newText: "stale",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      session,
+    );
+    await executing;
+    document.version = 2;
+    releaseExecution();
+
+    expect(await applying).toEqual({
+      applied: false,
+      failureReason: `Refusing a stale workspace edit for '${uri}': document version changed`,
+      failedChange: 1,
+    });
+    expect(editor.getText()).toBe("current\n");
+    expect(plan.dispose).toHaveBeenCalled();
+  });
+
+  it("reports the stale documentChanges index after confirmation", async () => {
+    installFileOperationsExecutor();
+    const filePath = path.join(tempDir, "version-during-confirm.js");
+    const renamedPath = path.join(tempDir, "renamed-during-confirm.js");
+    fs.writeFileSync(filePath, "current\n");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const document = { editor, uri, version: 1 };
+    const session = { documents: new Map([[C.uriKey(uri), document]]) };
+    spyOn(lumine.window, "confirm").and.callFake(async () => {
+      document.version = 2;
+      return 0;
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri, version: 1 },
+            edits: [],
+          },
+          { kind: "rename", oldUri: uri, newUri: C.pathToUri(renamedPath) },
+        ],
+      },
+      undefined,
+      session,
+    );
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "A document changed while the workspace edit was waiting.",
+      failedChange: 0,
+    });
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(fs.existsSync(renamedPath)).toBe(false);
+  });
+
+  it("detects an edit while the renamed buffer watcher is stabilizing", async () => {
+    installFileOperationsExecutor();
+    const source = path.join(tempDir, "watch-gate-source.txt");
+    const target = path.join(tempDir, "watch-gate-target.txt");
+    fs.writeFileSync(source, "before");
+    const editor = await lumine.workspace.open(source);
+    manager.watchEditor(editor);
+    const sourceUri = C.pathToUri(source);
+    const targetUri = C.pathToUri(target);
+    const document = { editor, uri: sourceUri, version: 1 };
+    const session = { documents: new Map([[C.uriKey(sourceUri), document]]) };
+    let enterGate;
+    let releaseGate;
+    const gateEntered = new Promise((resolve) => (enterGate = resolve));
+    const gate = new Promise((resolve) => (releaseGate = resolve));
+    spyOn(editor.getBuffer(), "getFileWatchStartPromise").and.callFake(() => {
+      enterGate();
+      return gate;
+    });
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const applying = manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "rename", oldUri: sourceUri, newUri: targetUri },
+          {
+            textDocument: { uri: targetUri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+                newText: "server",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      session,
+    );
+    await gateEntered;
+    editor.setText("user");
+    releaseGate();
+
+    expect(await applying).toEqual({
+      applied: false,
+      failureReason: `Refusing a stale workspace edit for '${targetUri}': document version changed`,
+      failedChange: 1,
+    });
+    expect(editor.getText()).toBe("user");
+    expect(editor.getPath()).toBe(target);
+  });
+
+  it("publishes durable executor effects to every interested session", async () => {
+    const source = path.join(tempDir, "effect-source.js");
+    const target = path.join(tempDir, "effect-target.js");
+    const cleanup = path.join(tempDir, ".effect-recovery");
+    const plan = {
+      describe: () => [{ status: "apply" }],
+      executeNext: jasmine.createSpy("executeNext").and.resolveTo({
+        status: "applied",
+        effects: [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
+        cleanupPaths: [cleanup],
+      }),
+      dispose() {},
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+    const didRename = spyOn(manager, "didRenameFiles");
+    const warning = spyOn(lumine.notifications, "addWarning");
+    const session = { documents: new Map() };
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    expect(
+      await manager.applyWorkspaceEdit(
+        {
+          documentChanges: [
+            { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+          ],
+        },
+        undefined,
+        session,
+      ),
+    ).toBe(true);
+    expect(didRename).toHaveBeenCalledWith({
+      files: [{ oldPath: source, newPath: target, isDirectory: false }],
+    });
+    expect(warning).toHaveBeenCalledWith("A file operation left recovery paths", {
+      detail: cleanup,
+      dismissable: true,
+    });
+  });
+
+  it("publishes lifecycle effects once and gates private watcher events", async () => {
+    const source = path.join(tempDir, "lifecycle-source.txt");
+    const target = path.join(tempDir, "lifecycle-target.txt");
+    const internal = path.join(tempDir, ".lifecycle-target.txt.lumine-copy-1-test");
+    const external = path.join(tempDir, "external.txt");
+    fs.writeFileSync(source, "source");
+    let willListener;
+    let didListener;
+    const executor = {
+      onWillExecuteStep(listener) {
+        willListener = listener;
+        return { dispose: () => (willListener = null) };
+      },
+      onDidExecuteStep(listener) {
+        didListener = listener;
+        return { dispose: () => (didListener = null) };
+      },
+      async prepare(operations) {
+        const plan = {
+          describe: () => [{ status: "apply" }],
+          async executeNext() {
+            const lifecycle = { id: 1, operationIndex: 0, operation: operations[0] };
+            willListener(lifecycle);
+            fs.renameSync(source, target);
+            manager.routeFileEvents([
+              { action: "created", path: internal },
+              { action: "deleted", path: source },
+              { action: "updated", path: external },
+            ]);
+            const result = {
+              status: "applied",
+              effects: [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
+            };
+            await didListener({
+              ...lifecycle,
+              result,
+              eventTrace: {
+                internalRoots: [{ path: internal, recursive: false }],
+                coveredRoots: [
+                  { path: source, recursive: false },
+                  { path: target, recursive: false },
+                ],
+              },
+            });
+            return result;
+          },
+          dispose() {},
+        };
+        return { status: "ready", plan };
+      },
+    };
+    manager.setFileOperationsExecutor(executor);
+    const publish = spyOn(manager, "publishFileOperationEffects").and.callThrough();
+    const watched = spyOn(manager, "notifyWatchedFileEvents").and.callThrough();
+    const deliver = spyOn(manager, "deliverFileEvents").and.callThrough();
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+        ],
+      }),
+    ).toBe(true);
+    expect(publish.calls.count()).toBe(1);
+    expect(publish).toHaveBeenCalledWith(
+      [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
+      { suppressProjectEvents: false },
+    );
+    expect(watched.calls.argsFor(0)[0]).toEqual([
+      { action: "deleted", path: source },
+      { action: "created", path: target },
+    ]);
+    expect(deliver).toHaveBeenCalledOnceWith([{ action: "updated", path: external }]);
+
+    manager.routeFileEvents([{ action: "created", path: internal }]);
+    expect(deliver.calls.count()).toBe(1);
+  });
+
+  it("returns a lifecycle coordination failure after a durable step", async () => {
+    let willListener;
+    let didListener;
+    const target = path.join(tempDir, "lifecycle-error.txt");
+    const executor = {
+      onWillExecuteStep(listener) {
+        willListener = listener;
+        return { dispose() {} };
+      },
+      onDidExecuteStep(listener) {
+        didListener = listener;
+        return { dispose() {} };
+      },
+      async prepare(operations) {
+        return {
+          status: "ready",
+          plan: {
+            describe: () => [{ status: "apply" }],
+            async executeNext() {
+              const lifecycle = { id: 9, operationIndex: 0, operation: operations[0] };
+              const result = {
+                status: "applied",
+                effects: [{ kind: "create", path: target, isDirectory: false }],
+              };
+              willListener(lifecycle);
+              await didListener({
+                ...lifecycle,
+                result,
+                eventTrace: { internalRoots: [], coveredRoots: [{ path: target }] },
+              });
+              return result;
+            },
+            dispose() {},
+          },
+        };
+      },
+    };
+    manager.setFileOperationsExecutor(executor);
+    spyOn(manager, "updateEditorsForFileEffects").and.throwError("retarget failed");
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [{ kind: "create", uri: C.pathToUri(target) }],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: "retarget failed",
+      failedChange: 0,
+    });
+  });
+
+  it("finishes an active lifecycle gate after its service is removed", async () => {
+    const source = path.join(tempDir, "removed-service-source.txt");
+    const target = path.join(tempDir, "removed-service-target.txt");
+    const internal = path.join(tempDir, ".removed-service.lumine-move-1-test");
+    fs.writeFileSync(source, "source");
+    let willListener;
+    let didListener;
+    const executor = {
+      onWillExecuteStep(listener) {
+        willListener = listener;
+        return { dispose: () => (willListener = null) };
+      },
+      onDidExecuteStep(listener) {
+        didListener = listener;
+        return { dispose: () => (didListener = null) };
+      },
+      async prepare(operations) {
+        return {
+          status: "ready",
+          plan: {
+            describe: () => [{ status: "apply" }],
+            async executeNext() {
+              const lifecycle = { id: 21, operationIndex: 0, operation: operations[0] };
+              willListener(lifecycle);
+              manager.routeFileEvents([{ action: "created", path: internal }]);
+              manager.setFileOperationsExecutor(null);
+              fs.renameSync(source, target);
+              fs.writeFileSync(internal, "recovery");
+              const result = {
+                status: "applied",
+                effects: [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
+                cleanupPaths: [internal],
+              };
+              await didListener({
+                ...lifecycle,
+                result,
+                eventTrace: {
+                  internalRoots: [{ path: internal, recursive: false }],
+                  coveredRoots: [
+                    { path: source, recursive: false },
+                    { path: target, recursive: false },
+                  ],
+                },
+              });
+              return result;
+            },
+            dispose() {},
+          },
+        };
+      },
+    };
+    manager.setFileOperationsExecutor(executor);
+    const publish = spyOn(manager, "publishFileOperationEffects").and.callThrough();
+    const deliver = spyOn(manager, "deliverFileEvents").and.callThrough();
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+      ],
+    });
+
+    expect(result).toEqual({
+      applied: false,
+      failureReason: `File operation service became unavailable.\n\nRecovery paths:\n${internal}`,
+      failedChange: 0,
+    });
+    expect(publish.calls.count()).toBe(1);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(fs.existsSync(source)).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toBe("source");
+  });
+
+  it("applies covered roots only to each gate's own event window", async () => {
+    const first = path.join(tempDir, "first-gate");
+    const second = path.join(tempDir, "second-gate");
+    const child = path.join(first, "child.ts");
+    const deliver = spyOn(manager, "deliverFileEvents").and.callThrough();
+    manager.beginFileOperationEventGate({
+      id: "first",
+      operation: { kind: "create", path: first },
+    });
+    manager.beginFileOperationEventGate({
+      id: "second",
+      operation: { kind: "create", path: second },
+    });
+    manager.routeFileEvents([
+      { action: "created", path: first },
+      { action: "updated", path: child },
+    ]);
+
+    await manager.finishFileOperationEventGate({
+      id: "first",
+      result: { status: "applied", effects: [{ kind: "create", path: first }] },
+      eventTrace: { internalRoots: [], coveredRoots: [{ path: first, recursive: true }] },
+    });
+    manager.routeFileEvents([{ action: "created", path: first }]);
+    await manager.finishFileOperationEventGate({
+      id: "second",
+      result: { status: "skipped", effects: [] },
+      eventTrace: { internalRoots: [], coveredRoots: [{ path: second, recursive: true }] },
+    });
+
+    expect(deliver).toHaveBeenCalledOnceWith([
+      { action: "updated", path: child },
+      { action: "created", path: first },
+    ]);
   });
 
   it("honors overwrite and ignore options for workspace file operations", async () => {
+    const executor = installFileOperationsExecutor();
+    const confirm = spyOn(lumine.window, "confirm").and.resolveTo(0);
     const created = path.join(tempDir, "created.txt");
     fs.writeFileSync(created, "old");
     expect(
@@ -938,7 +1765,6 @@ describe("ServerSession against a fake server", () => {
     const target = path.join(tempDir, "target.txt");
     fs.writeFileSync(source, "source");
     fs.writeFileSync(target, "target");
-    spyOn(lumine.window, "confirm").and.resolveTo(0);
     expect(
       await manager.applyWorkspaceEdit({
         documentChanges: [
@@ -970,22 +1796,45 @@ describe("ServerSession against a fake server", () => {
     ).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toBe("source");
     expect(fs.readFileSync(ignored, "utf8")).toBe("ignored");
+    expect(confirm.calls.count()).toBe(2);
+    expect(confirm.calls.first().args[0].detail).toContain(created);
+    expect(executor.prepare.calls.allArgs().flatMap(([operations]) => operations)).toEqual([
+      {
+        kind: "create",
+        path: created,
+        options: { overwrite: true, ignoreIfExists: true },
+      },
+      {
+        kind: "rename",
+        oldPath: source,
+        newPath: target,
+        options: { overwrite: true, ignoreIfExists: true },
+      },
+      {
+        kind: "rename",
+        oldPath: target,
+        newPath: ignored,
+        options: { ignoreIfExists: true },
+      },
+    ]);
   });
 
   it("deletes an empty directory without requiring recursive deletion", async () => {
+    installFileOperationsExecutor();
     const directory = path.join(tempDir, "empty-directory");
     fs.mkdirSync(directory);
     spyOn(lumine.window, "confirm").and.resolveTo(0);
 
-    const applied = await manager.applyWorkspaceEdit({
+    const result = await manager.applyWorkspaceEditDetailed({
       documentChanges: [{ kind: "delete", uri: C.pathToUri(directory) }],
     });
 
-    expect(applied).toBe(true);
+    expect(result).toEqual({ applied: true });
     expect(fs.existsSync(directory)).toBe(false);
   });
 
   it("applies text edits after creating their target", async () => {
+    installFileOperationsExecutor();
     const filePath = path.join(tempDir, "created-and-edited.txt");
     const uri = C.pathToUri(filePath);
     const applied = await manager.applyWorkspaceEdit({
@@ -1007,7 +1856,38 @@ describe("ServerSession against a fake server", () => {
     expect(editor.getText()).toBe("created");
   });
 
+  it("rejects text for a missing target before a later create", async () => {
+    const executor = installFileOperationsExecutor();
+    const filePath = path.join(tempDir, "edited-before-create.txt");
+    const uri = C.pathToUri(filePath);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        {
+          textDocument: { uri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "must not be staged",
+            },
+          ],
+        },
+        { kind: "create", uri },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toContain("does not exist");
+    expect(result.failedChange).toBe(0);
+    expect(executor.plans[0].executeNext).not.toHaveBeenCalled();
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(lumine.workspace.getTextEditors().some((editor) => editor.getPath() === filePath)).toBe(
+      false,
+    );
+  });
+
   it("opens a rename target only after the source has moved", async () => {
+    installFileOperationsExecutor();
     const source = path.join(tempDir, "rename-source.txt");
     const target = path.join(tempDir, "rename-target.txt");
     fs.writeFileSync(source, "source text");
@@ -1030,6 +1910,509 @@ describe("ServerSession against a fake server", () => {
     const editor = lumine.workspace.getTextEditors().find((item) => item.getPath() === target);
     expect(applied).toBe(true);
     expect(editor.getText()).toBe("updated text");
+  });
+
+  it("retargets an open buffer after the executor renames its file", async () => {
+    installFileOperationsExecutor();
+    const source = path.join(tempDir, "open-source.txt");
+    const target = path.join(tempDir, "open-target.txt");
+    fs.writeFileSync(source, "open text");
+    const editor = await lumine.workspace.open(source);
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+        ],
+      }),
+    ).toBe(true);
+    expect(editor.getPath()).toBe(target);
+    expect(lumine.workspace.getTextEditors().filter((item) => item.getPath() === target)).toEqual([
+      editor,
+    ]);
+  });
+
+  it("interleaves prepared resource steps with text edits in documentChanges order", async () => {
+    const executor = installFileOperationsExecutor();
+    const created = path.join(tempDir, "ordered-created.txt");
+    const renamed = path.join(tempDir, "ordered-renamed.txt");
+    const createdUri = C.pathToUri(created);
+    const renamedUri = C.pathToUri(renamed);
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const applied = await manager.applyWorkspaceEdit({
+      documentChanges: [
+        { kind: "create", uri: createdUri },
+        {
+          textDocument: { uri: createdUri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "one",
+            },
+          ],
+        },
+        { kind: "rename", oldUri: createdUri, newUri: renamedUri },
+        {
+          textDocument: { uri: renamedUri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 3 }, end: { line: 0, character: 3 } },
+              newText: " two",
+            },
+          ],
+        },
+      ],
+    });
+
+    const editor = lumine.workspace.getTextEditors().find((item) => item.getPath() === renamed);
+    expect(applied).toBe(true);
+    expect(editor.getText()).toBe("one two");
+    expect(executor.prepare.calls.mostRecent().args[0].map(({ kind }) => kind)).toEqual([
+      "create",
+      "rename",
+    ]);
+    expect(executor.plans[0].dispose).toHaveBeenCalled();
+  });
+
+  it("maps a text target through a preceding directory rename", async () => {
+    installFileOperationsExecutor();
+    const sourceDirectory = path.join(tempDir, "source-directory");
+    const targetDirectory = path.join(tempDir, "target-directory");
+    const sourceFile = path.join(sourceDirectory, "nested", "file.txt");
+    const targetFile = path.join(targetDirectory, "nested", "file.txt");
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, "before");
+    const editor = await lumine.workspace.open(sourceFile);
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        {
+          kind: "rename",
+          oldUri: C.pathToUri(sourceDirectory),
+          newUri: C.pathToUri(targetDirectory),
+        },
+        {
+          textDocument: { uri: C.pathToUri(targetFile), version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+              newText: "after",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({ applied: true });
+    expect(editor.getPath()).toBe(targetFile);
+    expect(editor.getText()).toBe("after");
+    expect(
+      lumine.workspace.getTextEditors().filter((candidate) => candidate.getPath() === targetFile),
+    ).toEqual([editor]);
+  });
+
+  it("validates a versioned rename target against its open source document", async () => {
+    installFileOperationsExecutor();
+    const source = path.join(tempDir, "versioned-source.txt");
+    const target = path.join(tempDir, "versioned-target.txt");
+    fs.writeFileSync(source, "before");
+    const editor = await lumine.workspace.open(source);
+    manager.watchEditor(editor);
+    const sourceUri = C.pathToUri(source);
+    const targetUri = C.pathToUri(target);
+    const document = { editor, uri: sourceUri, version: 7 };
+    const session = { documents: new Map([[C.uriKey(sourceUri), document]]) };
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "rename", oldUri: sourceUri, newUri: targetUri },
+          {
+            textDocument: { uri: targetUri, version: 7 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+                newText: "after",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      session,
+    );
+
+    expect(result).toEqual({ applied: true });
+    expect(editor.getPath()).toBe(target);
+    expect(editor.getText()).toBe("after");
+  });
+
+  it("reattaches a renamed document before sending its following text change", async () => {
+    const session = await startSession({
+      capabilities: {
+        textDocumentSync: 2,
+        workspace: {
+          fileOperations: {
+            didRename: { filters: [{ scheme: "file", pattern: { glob: "**/*" } }] },
+          },
+        },
+      },
+    });
+    const source = path.join(tempDir, "wire-source.txt");
+    const target = path.join(tempDir, "wire-target.txt");
+    fs.writeFileSync(source, "before");
+    const editor = await lumine.workspace.open(source);
+    await session.openEditor(editor);
+    manager.sessions.set("workspace-edit-wire-order", session);
+    spyOn(manager, "attachEditor").and.callFake((candidate) => session.openEditor(candidate));
+    manager.watchEditor(editor);
+    installFileOperationsExecutor();
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+    const sourceUri = C.pathToUri(source);
+    const targetUri = C.pathToUri(target);
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "rename", oldUri: sourceUri, newUri: targetUri },
+          {
+            textDocument: { uri: targetUri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+                newText: "after",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      session,
+    );
+    const protocol = (await receivedMessages(session))
+      .filter((message) =>
+        [
+          "workspace/didRenameFiles",
+          "textDocument/didClose",
+          "textDocument/didOpen",
+          "textDocument/didChange",
+        ].includes(message.method),
+      )
+      .slice(-4);
+
+    expect(result).toEqual({ applied: true });
+    expect(protocol.map(({ method }) => method)).toEqual([
+      "workspace/didRenameFiles",
+      "textDocument/didClose",
+      "textDocument/didOpen",
+      "textDocument/didChange",
+    ]);
+    expect(protocol[0].params.files).toEqual([{ oldUri: sourceUri, newUri: targetUri }]);
+    expect(protocol[1].params.textDocument.uri).toBe(sourceUri);
+    expect(protocol[2].params.textDocument.uri).toBe(targetUri);
+    expect(protocol[3].params.textDocument.uri).toBe(targetUri);
+  });
+
+  it("carries a version guard across a rename into another session", async () => {
+    const sourceSession = await startSession(
+      { capabilities: { textDocumentSync: 2 } },
+      { id: "same-language" },
+    );
+    const competingSession = await startSession(
+      { capabilities: { textDocumentSync: 2 } },
+      { id: "other-language" },
+    );
+    const targetSession = await startSession(
+      { capabilities: { textDocumentSync: 2 } },
+      { id: "same-language" },
+    );
+    const source = path.join(tempDir, "root-a", "cross-root.txt");
+    const target = path.join(tempDir, "root-b", "cross-root.txt");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(source, "before");
+    const editor = await lumine.workspace.open(source);
+    await sourceSession.openEditor(editor);
+    manager.sessions.set("workspace-edit-root-a", sourceSession);
+    manager.sessions.set("workspace-edit-other-language", competingSession);
+    manager.sessions.set("workspace-edit-root-b", targetSession);
+    spyOn(manager, "attachEditor").and.callFake(async (candidate) => {
+      await Promise.all([
+        competingSession.openEditor(candidate),
+        targetSession.openEditor(candidate),
+      ]);
+      [...competingSession.documents.values()].find(
+        (document) => document.editor === candidate,
+      ).version = 9;
+    });
+    manager.watchEditor(editor);
+    installFileOperationsExecutor();
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+    const sourceUri = C.pathToUri(source);
+    const targetUri = C.pathToUri(target);
+
+    const result = await manager.applyWorkspaceEditDetailed(
+      {
+        documentChanges: [
+          { kind: "rename", oldUri: sourceUri, newUri: targetUri },
+          {
+            textDocument: { uri: targetUri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+                newText: "after",
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      sourceSession,
+    );
+    const sourceChanges = (await receivedMessages(sourceSession)).filter(
+      ({ method }) => method === "textDocument/didChange",
+    );
+    const targetChanges = (await receivedMessages(targetSession)).filter(
+      ({ method }) => method === "textDocument/didChange",
+    );
+
+    expect(result).toEqual({ applied: true });
+    expect(sourceChanges).toEqual([]);
+    expect(targetChanges.at(-1).params.textDocument.uri).toBe(targetUri);
+  });
+
+  it("rejects text for a missing path after a skipped delete", async () => {
+    const missing = path.join(tempDir, "already-missing.txt");
+    const plan = {
+      describe: () => [{ status: "skip" }],
+      executeNext: jasmine.createSpy("executeNext"),
+      dispose: jasmine.createSpy("dispose"),
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        {
+          kind: "delete",
+          uri: C.pathToUri(missing),
+          options: { ignoreIfNotExists: true },
+        },
+        {
+          textDocument: { uri: C.pathToUri(missing), version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "must not be created",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toContain("will no longer exist");
+    expect(result.failedChange).toBe(1);
+    expect(plan.executeNext).not.toHaveBeenCalled();
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(lumine.workspace.getTextEditors().some((editor) => editor.getPath() === missing)).toBe(
+      false,
+    );
+  });
+
+  it("refuses to overwrite a path that already has an open buffer", async () => {
+    const executor = installFileOperationsExecutor();
+    const source = path.join(tempDir, "overwrite-source.txt");
+    const target = path.join(tempDir, "overwrite-target.txt");
+    fs.writeFileSync(source, "source");
+    fs.writeFileSync(target, "target");
+    await lumine.workspace.open(target);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        {
+          kind: "rename",
+          oldUri: C.pathToUri(source),
+          newUri: C.pathToUri(target),
+          options: { overwrite: true },
+        },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toContain("while it is open in the workspace");
+    expect(result.failedChange).toBe(0);
+    expect(executor.plans[0].executeNext).not.toHaveBeenCalled();
+    expect(fs.readFileSync(source, "utf8")).toBe("source");
+    expect(fs.readFileSync(target, "utf8")).toBe("target");
+  });
+
+  it("refuses a new resource target already held by an unsaved buffer", async () => {
+    const executor = installFileOperationsExecutor();
+    const source = path.join(tempDir, "unsaved-target-source.txt");
+    const target = path.join(tempDir, "unsaved-target.txt");
+    fs.writeFileSync(source, "source");
+    await lumine.workspace.open(target);
+
+    const createResult = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [{ kind: "create", uri: C.pathToUri(target) }],
+    });
+    const renameResult = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+      ],
+    });
+
+    expect(createResult.failedChange).toBe(0);
+    expect(renameResult.failedChange).toBe(0);
+    expect(createResult.failureReason).toContain("while it is open in the workspace");
+    expect(renameResult.failureReason).toContain("while it is open in the workspace");
+    expect(executor.plans.every((plan) => plan.executeNext.calls.count() === 0)).toBe(true);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.readFileSync(source, "utf8")).toBe("source");
+  });
+
+  it("retargets an editor from an executor's private rename path", async () => {
+    const source = path.join(tempDir, "private-rename-source.txt");
+    const target = path.join(tempDir, "private-rename-target.txt");
+    const recovery = path.join(tempDir, ".lumine-move-private");
+    fs.writeFileSync(source, "source");
+    const editor = await lumine.workspace.open(source);
+    manager.watchEditor(editor);
+    const reattach = spyOn(manager, "reattachEditor").and.callThrough();
+    const plan = {
+      describe: () => [{ status: "apply" }],
+      executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
+        editor.getBuffer().setPath(recovery);
+        fs.renameSync(source, target);
+        return {
+          status: "applied",
+          effects: [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
+        };
+      }),
+      dispose() {},
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(target) },
+        ],
+      }),
+    ).toBe(true);
+    expect(editor.getPath()).toBe(target);
+    expect(reattach.calls.count()).toBe(1);
+  });
+
+  it("restores an open editor's logical path after executor-private deletion", async () => {
+    const source = path.join(tempDir, "private-delete-source.txt");
+    const recovery = path.join(tempDir, ".lumine-delete-private");
+    fs.writeFileSync(source, "source");
+    const editor = await lumine.workspace.open(source);
+    manager.watchEditor(editor);
+    const reattach = spyOn(manager, "reattachEditor").and.callThrough();
+    const plan = {
+      describe: () => [{ status: "apply" }],
+      executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
+        editor.getBuffer().setPath(recovery);
+        fs.rmSync(source);
+        return {
+          status: "applied",
+          effects: [{ kind: "delete", path: source, isDirectory: false }],
+        };
+      }),
+      dispose() {},
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [{ kind: "delete", uri: C.pathToUri(source) }],
+      }),
+    ).toBe(true);
+    expect(editor.getPath()).toBe(source);
+    expect(reattach.calls.count()).toBe(1);
+  });
+
+  it("restores an editor path after a private move rolls back without effects", async () => {
+    const source = path.join(tempDir, "rolled-back-source.txt");
+    const recovery = path.join(tempDir, ".lumine-move-rolled-back");
+    fs.writeFileSync(source, "source");
+    const editor = await lumine.workspace.open(source);
+    manager.watchEditor(editor);
+    const reattach = spyOn(manager, "reattachEditor").and.callThrough();
+    const plan = {
+      describe: () => [{ status: "apply" }],
+      executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
+        editor.getBuffer().setPath(recovery);
+        return { status: "failed", reason: "copy failed and rolled back", effects: [] };
+      }),
+      dispose() {},
+    };
+    manager.setFileOperationsExecutor({
+      prepare: jasmine.createSpy("prepare").and.resolveTo({ status: "ready", plan }),
+    });
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "rename", oldUri: C.pathToUri(source), newUri: C.pathToUri(`${source}.new`) },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toBe("copy failed and rolled back");
+    expect(editor.getPath()).toBe(source);
+    expect(reattach.calls.count()).toBe(1);
+  });
+
+  it("rechecks an overwrite target immediately before the resource step", async () => {
+    const executor = installFileOperationsExecutor();
+    const target = path.join(tempDir, "late-open-target.txt");
+    const source = path.join(tempDir, "late-open-source.txt");
+    const targetUri = C.pathToUri(target);
+    fs.writeFileSync(source, "source");
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+
+    const result = await manager.applyWorkspaceEditDetailed({
+      documentChanges: [
+        { kind: "create", uri: targetUri },
+        {
+          textDocument: { uri: targetUri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "open target",
+            },
+          ],
+        },
+        {
+          kind: "rename",
+          oldUri: C.pathToUri(source),
+          newUri: targetUri,
+          options: { overwrite: true },
+        },
+      ],
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.failureReason).toContain("while it is open in the workspace");
+    expect(result.failedChange).toBe(2);
+    expect(executor.plans[0].executeNext.calls.count()).toBe(1);
+    expect(fs.readFileSync(source, "utf8")).toBe("source");
+    expect(fs.readFileSync(target, "utf8")).toBe("");
   });
 
   it("hands a pulled diagnostic report to the adapter with the editor it belongs to", async () => {

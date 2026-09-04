@@ -433,4 +433,19 @@ describe("IntentionsProvider", () => {
     expect(calls[0].method).toBe("codeAction/resolve");
     expect(applied).toEqual(["Lazy"]);
   });
+
+  it("does not execute a code-action command after its workspace edit fails", async () => {
+    const session = sessionWith(() => null);
+    spyOn(session, "request").and.callThrough();
+    const manager = managerWith(session, { applyWorkspaceEdit: async () => false });
+    const provider = new IntentionsProvider(manager);
+
+    await provider.applyAction(session, {
+      title: "Unsafe follow-up",
+      edit: { documentChanges: [] },
+      command: { command: "tool.run", arguments: [1] },
+    });
+
+    expect(session.request).not.toHaveBeenCalled();
+  });
 });
