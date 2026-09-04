@@ -1034,14 +1034,25 @@ describe("LanguageServerManager capabilities", () => {
     const pyPath = path.join("C:", "project", "b.py");
     manager.routeFileEvents([
       { action: "created", path: tsPath },
-      { action: "modified", path: tsPath },
+      { action: "updated", path: tsPath },
       { action: "created", path: pyPath },
-      { action: "renamed", path: tsPath, oldPath: path.join("C:", "project", "old.ts") },
+      { action: "deleted", path: path.join("C:", "project", "old.ts") },
     ]);
     expect(notifications.length).toBe(1);
     const changes = notifications[0].params.changes;
-    // kind 5 = create | delete: the "modified" event and the .py file are filtered out.
-    expect(changes.map((change) => change.type)).toEqual([1, 3, 1]);
+    // kind 5 = create | delete: the "updated" event and the .py file are filtered out.
+    expect(changes.map((change) => change.type)).toEqual([1, 3]);
+
+    manager.unregisterCapabilities(session, [{ id: "watch-1" }]);
+    manager.registerCapabilities(session, [
+      {
+        id: "watch-2",
+        method: "workspace/didChangeWatchedFiles",
+        registerOptions: { watchers: [{ globPattern: "**/*.ts" }] },
+      },
+    ]);
+    manager.routeFileEvents([{ action: "updated", path: tsPath }]);
+    expect(notifications.at(-1).params.changes).toEqual([{ uri: C.pathToUri(tsPath), type: 2 }]);
   });
 
   it("routes file operations through the server's static filters", () => {
@@ -1062,7 +1073,6 @@ describe("LanguageServerManager capabilities", () => {
           fileOperations: {
             didCreate: { filters: [markdownFilter] },
             didDelete: { filters: [markdownFilter] },
-            didRename: { filters: [markdownFilter] },
           },
         },
       },
@@ -1074,29 +1084,17 @@ describe("LanguageServerManager capabilities", () => {
       { action: "created", path: path.join(root, "New.MD") },
       { action: "created", path: path.join(root, "ignored.txt") },
       { action: "deleted", path: path.join(root, "old.markdown") },
-      {
-        action: "renamed",
-        oldPath: path.join(root, "before.md"),
-        path: path.join(root, "after.md"),
-      },
     ]);
 
     expect(notifications.map(({ method }) => method)).toEqual([
       "workspace/didCreateFiles",
       "workspace/didDeleteFiles",
-      "workspace/didRenameFiles",
     ]);
     expect(notifications[0].params.files).toEqual([
       { uri: C.pathToUri(path.join(root, "New.MD")) },
     ]);
     expect(notifications[1].params.files).toEqual([
       { uri: C.pathToUri(path.join(root, "old.markdown")) },
-    ]);
-    expect(notifications[2].params.files).toEqual([
-      {
-        oldUri: C.pathToUri(path.join(root, "before.md")),
-        newUri: C.pathToUri(path.join(root, "after.md")),
-      },
     ]);
     manager.sessions.clear();
   });
@@ -1105,7 +1103,6 @@ describe("LanguageServerManager capabilities", () => {
     expect(manager.buildClientCapabilities().workspace.fileOperations).toEqual({
       dynamicRegistration: false,
       didCreate: true,
-      didRename: true,
       didDelete: true,
     });
   });

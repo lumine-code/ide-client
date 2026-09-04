@@ -4,6 +4,7 @@ const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
 const ServerSession = require("../lib/server-session");
 const SymbolProvider = require("../lib/symbol-provider");
+const C = require("../lib/converters");
 
 const FIXTURE = path.join(__dirname, "fixtures", "fake-server.js");
 
@@ -364,6 +365,71 @@ describe("ServerSession against a fake server", () => {
     expect(didChange.params.contentChanges).toEqual([{ text: "replaced\n" }]);
   });
 
+  it("sends no document notifications when the server opts out of synchronization", async () => {
+    const filePath = path.join(tempDir, "unsynced.js");
+    fs.writeFileSync(filePath, "start\n");
+    const session = await startSession({
+      capabilities: { textDocumentSync: { openClose: false, change: 0, save: false } },
+    });
+    const editor = await lumine.workspace.open(filePath);
+
+    await session.openEditor(editor);
+    editor.setText("changed\n");
+    await editor.save();
+    session.detachEditor(editor);
+
+    const methods = (await receivedMessages(session)).map(({ method }) => method);
+    expect(methods).not.toContain("textDocument/didOpen");
+    expect(methods).not.toContain("textDocument/didChange");
+    expect(methods).not.toContain("textDocument/didSave");
+    expect(methods).not.toContain("textDocument/didClose");
+  });
+
+  it("honors granular open, change, close and save options", async () => {
+    const filePath = path.join(tempDir, "granular.js");
+    fs.writeFileSync(filePath, "start\n");
+    const session = await startSession({
+      capabilities: {
+        textDocumentSync: { openClose: true, change: 2, save: { includeText: false } },
+      },
+    });
+    const editor = await lumine.workspace.open(filePath);
+
+    await session.openEditor(editor);
+    editor.setText("changed\n");
+    await editor.save();
+    session.detachEditor(editor);
+
+    const received = await receivedMessages(session);
+    expect(received.some(({ method }) => method === "textDocument/didOpen")).toBe(true);
+    expect(received.some(({ method }) => method === "textDocument/didChange")).toBe(true);
+    const save = received.find(({ method }) => method === "textDocument/didSave");
+    expect(save.params).toEqual({ textDocument: { uri: C.pathToUri(filePath) } });
+    expect(received.some(({ method }) => method === "textDocument/didClose")).toBe(true);
+  });
+
+  it("includes transformed text on save only when the server requests it", async () => {
+    const filePath = path.join(tempDir, "save-text.js");
+    fs.writeFileSync(filePath, "secret\n");
+    const session = await startSession(
+      {
+        capabilities: {
+          textDocumentSync: { openClose: true, change: 2, save: { includeText: true } },
+        },
+      },
+      { transformDocumentText: (text) => text.replaceAll("secret", "hidden") },
+    );
+    const editor = await lumine.workspace.open(filePath);
+
+    await session.openEditor(editor);
+    await editor.save();
+
+    const save = (await receivedMessages(session)).find(
+      ({ method }) => method === "textDocument/didSave",
+    );
+    expect(save.params.text).toBe("hidden\n");
+  });
+
   it("pulls, refreshes, and clears diagnostics for a pull-only server", async () => {
     const filePath = path.join(tempDir, "diagnostic.js");
     const uri = require("url").pathToFileURL(filePath).href;
@@ -486,6 +552,106 @@ describe("ServerSession against a fake server", () => {
       session,
     );
     expect(editor.getText()).toBe("secret\n");
+  });
+
+  it("refuses a versioned workspace edit after the document changes", async () => {
+    const filePath = path.join(tempDir, "stale-edit.js");
+    fs.writeFileSync(filePath, "current\n");
+    const editor = await lumine.workspace.open(filePath);
+    const uri = C.pathToUri(filePath);
+    const session = { documents: new Map([[C.uriKey(uri), { editor, uri, version: 2 }]]) };
+
+    const applied = await manager.applyWorkspaceEdit(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri, version: 1 },
+            edits: [
+              {
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 7 },
+                },
+                newText: "stale",
+              },
+            ],
+          },
+        ],
+      },
+      "Stale edit",
+      session,
+    );
+
+    expect(applied).toBe(false);
+    expect(editor.getText()).toBe("current\n");
+  });
+
+  it("reports a workspace edit as failed when its target cannot be resolved", async () => {
+    const applied = await manager.applyWorkspaceEdit({
+      changes: {
+        "untitled:missing": [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            newText: "lost",
+          },
+        ],
+      },
+    });
+    expect(applied).toBe(false);
+  });
+
+  it("honors overwrite and ignore options for workspace file operations", async () => {
+    const created = path.join(tempDir, "created.txt");
+    fs.writeFileSync(created, "old");
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          {
+            kind: "create",
+            uri: C.pathToUri(created),
+            options: { overwrite: true, ignoreIfExists: true },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(fs.readFileSync(created, "utf8")).toBe("");
+
+    const source = path.join(tempDir, "source.txt");
+    const target = path.join(tempDir, "target.txt");
+    fs.writeFileSync(source, "source");
+    fs.writeFileSync(target, "target");
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          {
+            kind: "rename",
+            oldUri: C.pathToUri(source),
+            newUri: C.pathToUri(target),
+            options: { overwrite: true, ignoreIfExists: true },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(fs.existsSync(source)).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toBe("source");
+
+    const ignored = path.join(tempDir, "ignored.txt");
+    fs.writeFileSync(ignored, "ignored");
+    expect(
+      await manager.applyWorkspaceEdit({
+        documentChanges: [
+          {
+            kind: "rename",
+            oldUri: C.pathToUri(target),
+            newUri: C.pathToUri(ignored),
+            options: { ignoreIfExists: true },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe("source");
+    expect(fs.readFileSync(ignored, "utf8")).toBe("ignored");
   });
 
   it("hands a pulled diagnostic report to the adapter with the editor it belongs to", async () => {
@@ -1010,8 +1176,6 @@ describe("ServerSession against a fake server", () => {
   });
 
   describe("notebook documents", () => {
-    const C = require("../lib/converters");
-
     it("forwards the notebook lifecycle notifications verbatim", async () => {
       const session = await startSession();
       const notebook = { uri: "file:///C:/proj/nb.ipynb", notebookType: "jupyter-notebook" };
