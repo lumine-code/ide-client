@@ -103,6 +103,9 @@ describe("ServerSession against a fake server", () => {
     expect(initialize.params.capabilities.textDocument.typeHierarchy).toEqual({
       dynamicRegistration: true,
     });
+    expect(initialize.params.capabilities.notebookDocument.synchronization).toEqual({
+      dynamicRegistration: false,
+    });
     expect(initialize.params.capabilities.workspace.diagnostics.refreshSupport).toBe(true);
     expect(
       initialize.params.capabilities.workspace.didChangeConfiguration.dynamicRegistration,
@@ -133,6 +136,30 @@ describe("ServerSession against a fake server", () => {
     expect(initialized).toBeGreaterThan(-1);
     expect(configured).toBeGreaterThan(initialized);
     expect(received[configured].params.settings).toEqual({ example: { size: 2 } });
+  });
+
+  it("sends adapter notifications after initialized and initial settings", async () => {
+    let context;
+    const session = await startSession(
+      {},
+      {
+        getSettings: () => ({ css: { validate: true } }),
+        getInitializedNotifications: (value) => {
+          context = value;
+          return [{ method: "css/customDataChanged", params: { paths: ["custom.json"] } }];
+        },
+      },
+    );
+    expect(context.rootPath).toBe(tempDir);
+    expect(context.rootUri).toBe(C.pathToUri(tempDir));
+    expect(context.session).toBe(session);
+    const methods = (await receivedMessages(session)).map(({ method }) => method);
+    expect(methods.indexOf("initialized")).toBeLessThan(
+      methods.indexOf("workspace/didChangeConfiguration"),
+    );
+    expect(methods.indexOf("workspace/didChangeConfiguration")).toBeLessThan(
+      methods.indexOf("css/customDataChanged"),
+    );
   });
 
   it("uses a preflight startup snapshot without repeating adapter hooks", async () => {
@@ -584,6 +611,54 @@ describe("ServerSession against a fake server", () => {
 
     expect(applied).toBe(false);
     expect(editor.getText()).toBe("current\n");
+  });
+
+  it("preflights every workspace edit before applying the first one", async () => {
+    const firstPath = path.join(tempDir, "first-edit.js");
+    const stalePath = path.join(tempDir, "second-stale.js");
+    fs.writeFileSync(firstPath, "first\n");
+    fs.writeFileSync(stalePath, "second\n");
+    const first = await lumine.workspace.open(firstPath);
+    const stale = await lumine.workspace.open(stalePath);
+    const firstUri = C.pathToUri(firstPath);
+    const staleUri = C.pathToUri(stalePath);
+    const session = {
+      documents: new Map([
+        [C.uriKey(firstUri), { editor: first, uri: firstUri, version: 1 }],
+        [C.uriKey(staleUri), { editor: stale, uri: staleUri, version: 2 }],
+      ]),
+    };
+
+    const applied = await manager.applyWorkspaceEdit(
+      {
+        documentChanges: [
+          {
+            textDocument: { uri: firstUri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+                newText: "changed",
+              },
+            ],
+          },
+          {
+            textDocument: { uri: staleUri, version: 1 },
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+                newText: "stale",
+              },
+            ],
+          },
+        ],
+      },
+      "Atomic preflight",
+      session,
+    );
+
+    expect(applied).toBe(false);
+    expect(first.getText()).toBe("first\n");
+    expect(stale.getText()).toBe("second\n");
   });
 
   it("reports a workspace edit as failed when its target cannot be resolved", async () => {

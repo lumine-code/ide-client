@@ -64,12 +64,7 @@ describe("InlayHintsProvider", () => {
     expect(manager.fragments).toEqual([
       {
         textDocument: {
-          inlayHint: {
-            dynamicRegistration: true,
-            resolveSupport: {
-              properties: ["tooltip", "textEdits", "label.tooltip", "label.command"],
-            },
-          },
+          inlayHint: { dynamicRegistration: true },
         },
         workspace: { inlayHint: { refreshSupport: true } },
       },

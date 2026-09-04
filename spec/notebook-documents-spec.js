@@ -4,7 +4,11 @@ const path = require("path");
 const LanguageServerManager = require("../lib/language-server-manager");
 const NotebookDocuments = require("../lib/notebook-documents");
 const ServerSession = require("../lib/server-session");
-const { notebookSyncMatches, diffCellOrder } = require("../lib/notebook-documents");
+const {
+  notebookSyncMatches,
+  selectorLanguages,
+  diffCellOrder,
+} = require("../lib/notebook-documents");
 const C = require("../lib/converters");
 
 const FIXTURE = path.join(__dirname, "fixtures", "fake-server.js");
@@ -54,6 +58,45 @@ describe("notebook sync selectors", () => {
     expect(notebookSyncMatches(undefined, jupyterPython)).toBe(false);
     expect(notebookSyncMatches({}, jupyterPython)).toBe(false);
   });
+  it("honors notebook globs and wildcard filters", () => {
+    const wildcard = {
+      notebookSelector: [
+        {
+          notebook: { notebookType: "*", scheme: "*", pattern: "**/books/**" },
+          cells: [{ language: "*" }],
+        },
+      ],
+    };
+    expect(
+      notebookSyncMatches(wildcard, {
+        ...jupyterPython,
+        filePath: path.join("C:", "work", "books", "one.ipynb"),
+      }),
+    ).toBe(true);
+    expect(
+      notebookSyncMatches(wildcard, {
+        ...jupyterPython,
+        filePath: path.join("C:", "work", "notes", "one.ipynb"),
+      }),
+    ).toBe(false);
+  });
+  it("unites cell languages only across selectors matching this notebook", () => {
+    const options = {
+      notebookSelector: [
+        { notebook: "jupyter-notebook", cells: [{ language: "python" }] },
+        { notebook: "jupyter-notebook", cells: [{ language: "javascript" }] },
+        { notebook: "quarto", cells: [{ language: "r" }] },
+      ],
+    };
+    const context = {
+      notebookType: "jupyter-notebook",
+      filePath: path.join("C:", "work", "one.ipynb"),
+      cellLanguageIds: ["javascript"],
+    };
+    expect(notebookSyncMatches(options, context)).toBe(true);
+    expect([...selectorLanguages(options, context)]).toEqual(["python", "javascript"]);
+    expect(notebookSyncMatches(options, { ...context, cellLanguageIds: ["r"] })).toBe(false);
+  });
 });
 
 describe("diffCellOrder", () => {
@@ -94,7 +137,7 @@ describe("NotebookDocuments against a fake server", () => {
     return editor;
   };
 
-  const registerFakeAdapter = (config = {}) => {
+  const registerFakeAdapter = (config = {}, extras = {}) => {
     const launch = {
       command: process.execPath,
       args: [FIXTURE, JSON.stringify(config)],
@@ -107,6 +150,7 @@ describe("NotebookDocuments against a fake server", () => {
       grammarScopes: ["text.plain.null-grammar"],
       languageId: "python",
       resolveServer: () => launch,
+      ...extras,
     };
     manager.registerAdapter(adapter);
     return adapter;
@@ -255,6 +299,28 @@ describe("NotebookDocuments against a fake server", () => {
     expect(textContent[0].document.version).toBe(2);
     expect(textContent[0].changes[0].text).toBe("y = 2\n");
     expect(textContent[0].changes[0].range).toBeDefined();
+  });
+
+  it("transforms notebook text on open and sends transformed full changes", async () => {
+    registerFakeAdapter(
+      { capabilities: { notebookDocumentSync: RUFF_SYNC } },
+      { transformDocumentText: (text) => text.replaceAll("secret", "hidden") },
+    );
+    const editor = buildCellEditor("secret = 1\n");
+    const bridge = notebooks.open({
+      filePath: notebookPath,
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+    });
+    await bridge.attached;
+
+    const open = (await ofMethod("notebookDocument/didOpen"))[0].params;
+    expect(open.cellTextDocuments[0].text).toBe("hidden = 1\n");
+
+    editor.setText("secret = 2\n");
+    await until(async () => (await ofMethod("notebookDocument/didChange")).length > 0);
+    const textContent = (await ofMethod("notebookDocument/didChange"))[0].params.change.cells
+      .textContent[0];
+    expect(textContent.changes).toEqual([{ text: "hidden = 2\n" }]);
   });
 
   it("expresses structure changes as splices with cell open and close", async () => {

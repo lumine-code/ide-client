@@ -2422,8 +2422,9 @@ describe("LanguageServerManager server messages", () => {
 });
 
 describe("languageIdForEditor", () => {
-  const editorWith = (scopeName, name) => ({
+  const editorWith = (scopeName, name, filePath) => ({
     getGrammar: () => ({ scopeName, name }),
+    getPath: () => filePath,
   });
   it("maps grammar scopes through the table", () => {
     expect(languageIdForEditor({}, editorWith("source.python", "Python"))).toBe("python");
@@ -2439,5 +2440,23 @@ describe("languageIdForEditor", () => {
     expect(languageIdForEditor(adapter, editorWith("source.python", "Python"))).toBe("python");
     expect(languageIdForEditor(adapter, editorWith("source.unknown", "Unknown"))).toBe("blanket");
     expect(languageIdForEditor({}, editorWith("source.unknown", "Unknown"))).toBe("unknown");
+  });
+  it("distinguishes JSX files that share the JavaScript grammar scope", () => {
+    expect(languageIdForEditor({}, editorWith("source.js", "JavaScript", "view.jsx"))).toBe(
+      "javascriptreact",
+    );
+    expect(languageIdForEditor({}, editorWith("source.js", "JavaScript", "module.mjs"))).toBe(
+      "javascript",
+    );
+  });
+  it("hands the editor and file path to an adapter scope override", () => {
+    const editor = editorWith("source.js", "JavaScript", "component.jsx");
+    const adapter = {
+      languageIdForScope: (scope, context) =>
+        scope === "source.js" && context.editor === editor && context.filePath.endsWith(".jsx")
+          ? "adapter-jsx"
+          : undefined,
+    };
+    expect(languageIdForEditor(adapter, editor)).toBe("adapter-jsx");
   });
 });
