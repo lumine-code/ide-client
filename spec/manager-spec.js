@@ -18,6 +18,10 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
+const lspRange = (row, start, end) => ({
+  start: { line: row, character: start },
+  end: { line: row, character: end },
+});
 
 describe("LanguageServerManager adapters", () => {
   let manager;
@@ -63,6 +67,31 @@ describe("LanguageServerManager adapters", () => {
     await manager.unregisterAdapter(adapter);
     expect(manager.adaptersForEditor(editor)).toEqual([]);
     expect(changes[1]).toEqual({ adapter, registered: false });
+  });
+  it("matches every field of an adapter document selector", () => {
+    const makeAdapter = (id, documentSelector) => ({
+      id,
+      displayName: id,
+      grammarScopes: ["source.js"],
+      documentSelector,
+      resolveServer: async () => null,
+    });
+    const matching = makeAdapter("matching", [
+      { language: "javascript", scheme: "file", pattern: "**/*.js" },
+    ]);
+    const wrongLanguage = makeAdapter("wrong-language", [{ language: "python" }]);
+    const wrongScheme = makeAdapter("wrong-scheme", [{ scheme: "untitled" }]);
+    manager.registerAdapter(matching);
+    manager.registerAdapter(wrongLanguage);
+    manager.registerAdapter(wrongScheme);
+    const editor = {
+      getGrammar: () => ({ scopeName: "source.js", name: "JavaScript" }),
+      getPath: () => path.join("C:", "project", "file.js"),
+    };
+    const untitled = { ...editor, getPath: () => null };
+
+    expect(manager.adaptersForEditor(editor)).toEqual([matching]);
+    expect(manager.adaptersForEditor(untitled)).toEqual([wrongScheme]);
   });
   it("restarts instead of pushing settings when a changed key belongs to both lists", async () => {
     const adapter = {
@@ -992,6 +1021,19 @@ describe("LanguageServerManager capabilities", () => {
     expect(announced).toEqual([session, session]);
   });
 
+  it("releases dynamic registrations with their terminal session", () => {
+    const session = { state: "running", adapter: { grammarScopes: [] } };
+    manager.registerCapabilities(session, [
+      { id: "reg-1", method: "textDocument/hover", registerOptions: {} },
+    ]);
+    expect(manager.dynamicCapabilities.has(session)).toBe(true);
+
+    session.state = "stopped";
+    manager.didChangeSession(session);
+
+    expect(manager.dynamicCapabilities.has(session)).toBe(false);
+  });
+
   it("carries the options a dynamic registration was made with", () => {
     // A server that registers dynamically declares nothing statically, so the
     // legend, the trigger characters and the like live only here. Tinymist
@@ -1102,9 +1144,178 @@ describe("LanguageServerManager capabilities", () => {
   it("advertises exactly the file operations it routes", () => {
     expect(manager.buildClientCapabilities().workspace.fileOperations).toEqual({
       dynamicRegistration: false,
+      willCreate: true,
+      willRename: true,
+      willDelete: true,
       didCreate: true,
+      didRename: true,
       didDelete: true,
     });
+  });
+
+  it("routes awaitable tree-view file operations through matching server filters", async () => {
+    const requests = [];
+    const notifications = [];
+    const filter = { scheme: "file", pattern: { glob: "**/*.ts", matches: "file" } };
+    const session = {
+      state: "running",
+      adapter: { grammarScopes: [] },
+      capabilities: {
+        workspace: {
+          fileOperations: {
+            willRename: { filters: [filter] },
+            didRename: { filters: [filter] },
+          },
+        },
+      },
+      request: async (method, params) => {
+        requests.push({ method, params });
+        return { changes: {} };
+      },
+      notify: (method, params) => notifications.push({ method, params }),
+    };
+    manager.sessions.set("fake:root", session);
+    spyOn(manager, "applyWorkspaceEdits").and.resolveTo(true);
+    const payload = {
+      files: [
+        {
+          oldPath: path.join("C:", "project", "before.ts"),
+          newPath: path.join("C:", "project", "after.ts"),
+          isDirectory: false,
+        },
+      ],
+    };
+
+    expect(await manager.willRenameFiles(payload)).toBe(true);
+    manager.didRenameFiles(payload);
+
+    expect(requests[0].method).toBe("workspace/willRenameFiles");
+    expect(requests[0].params.files[0].oldUri).toBe(C.pathToUri(payload.files[0].oldPath));
+    expect(manager.applyWorkspaceEdits).toHaveBeenCalledWith(
+      [{ edit: { changes: {} }, session }],
+      "Prepare file rename",
+    );
+    expect(notifications[0].method).toBe("workspace/didRenameFiles");
+    manager.sessions.clear();
+  });
+
+  it("suppresses duplicate project events for every running server", () => {
+    const notifications = [];
+    const filter = { pattern: { glob: "**/*.ts" } };
+    for (const id of ["one", "two"]) {
+      manager.sessions.set(id, {
+        state: "running",
+        adapter: { grammarScopes: [] },
+        capabilities: { workspace: { fileOperations: { didCreate: { filters: [filter] } } } },
+        notify: (method) => notifications.push({ id, method }),
+      });
+    }
+    const filePath = path.join("C:", "project", "new.ts");
+
+    manager.didCreateFiles({
+      paths: [filePath],
+      entries: [{ path: filePath, isDirectory: false }],
+    });
+    manager.routeFileEvents([{ action: "created", path: filePath }]);
+
+    expect(notifications).toEqual([
+      { id: "one", method: "workspace/didCreateFiles" },
+      { id: "two", method: "workspace/didCreateFiles" },
+    ]);
+    manager.sessions.clear();
+  });
+
+  it("does not apply one server's preparation when another server rejects", async () => {
+    const filter = { pattern: { glob: "**/*.ts" } };
+    const filePath = path.join("C:", "project", "file.ts");
+    let text = "original";
+    const edit = {
+      changes: {
+        [C.pathToUri(filePath)]: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } },
+            newText: "prepared",
+          },
+        ],
+      },
+    };
+    manager.sessions.set("one", {
+      state: "running",
+      adapter: { grammarScopes: [] },
+      capabilities: { workspace: { fileOperations: { willDelete: { filters: [filter] } } } },
+      request: async () => edit,
+    });
+    manager.sessions.set("two", {
+      state: "running",
+      adapter: { displayName: "Second", grammarScopes: [] },
+      capabilities: { workspace: { fileOperations: { willDelete: { filters: [filter] } } } },
+      request: async () => {
+        throw new Error("not ready");
+      },
+    });
+    spyOn(manager, "applyWorkspaceEdits").and.callFake(async () => {
+      text = "prepared";
+      return true;
+    });
+
+    expect(await manager.willDeleteFiles({ paths: [filePath] })).toBe(false);
+
+    expect(text).toBe("original");
+    expect(manager.applyWorkspaceEdits).not.toHaveBeenCalled();
+    manager.sessions.clear();
+  });
+
+  it("applies non-overlapping preparations from two servers in one transaction", async () => {
+    const filter = { pattern: { glob: "**/*.ts" } };
+    const filePath = path.join("C:", "project", "file.ts");
+    const uri = C.pathToUri(filePath);
+    const editor = await lumine.workspace.buildTextEditor();
+    editor.setText("one two");
+    spyOn(manager, "editorForWorkspaceEdit").and.resolveTo(editor);
+    const responses = [
+      { changes: { [uri]: [{ range: lspRange(0, 0, 3), newText: "ONE" }] } },
+      { changes: { [uri]: [{ range: lspRange(0, 4, 7), newText: "TWO" }] } },
+    ];
+    responses.forEach((edit, index) =>
+      manager.sessions.set(String(index), {
+        state: "running",
+        adapter: { grammarScopes: [] },
+        capabilities: { workspace: { fileOperations: { willRename: { filters: [filter] } } } },
+        request: async () => edit,
+      }),
+    );
+
+    const applied = await manager.willRenameFiles({
+      files: [{ oldPath: filePath, newPath: path.join("C:", "project", "next.ts") }],
+    });
+
+    expect(applied).toBe(true);
+    expect(editor.getText()).toBe("ONE TWO");
+    editor.destroy();
+    manager.sessions.clear();
+  });
+
+  it("cancels a tree-view operation when a server preparation fails", async () => {
+    const filePath = path.join("C:", "project", "file.ts");
+    const session = {
+      state: "running",
+      adapter: { displayName: "TypeScript", grammarScopes: [] },
+      capabilities: {
+        workspace: {
+          fileOperations: {
+            willDelete: { filters: [{ pattern: { glob: "**/*.ts" } }] },
+          },
+        },
+      },
+      request: async () => {
+        throw new Error("index unavailable");
+      },
+    };
+    manager.sessions.set("fake:root", session);
+
+    expect(await manager.willDeleteFiles({ paths: [filePath] })).toBe(false);
+
+    manager.sessions.clear();
   });
 
   it("notifies running sessions about workspace folder changes", () => {

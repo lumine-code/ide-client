@@ -1,6 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const tar = require("tar");
 const LanguageServerManager = require("../lib/language-server-manager");
 const ManagedServers = require("../lib/managed-servers");
@@ -76,13 +77,25 @@ describe("InstallApi", () => {
     it("flattens a GitHub release to its version, tag and assets", async () => {
       routes["https://api.github.com/repos/example/tool/releases/latest"] = JSON.stringify({
         tag_name: "v2.1.0",
-        assets: [{ name: "tool-linux", browser_download_url: "https://x/tool-linux", size: 12 }],
+        assets: [
+          {
+            name: "tool-linux",
+            browser_download_url: "https://x/tool-linux",
+            size: 12,
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+        ],
       });
       const release = await api.latestGithubRelease("example/tool");
       expect(release.version).toBe("2.1.0");
       expect(release.tag).toBe("v2.1.0");
       expect(release.assets).toEqual([
-        { name: "tool-linux", url: "https://x/tool-linux", size: 12 },
+        {
+          name: "tool-linux",
+          url: "https://x/tool-linux",
+          size: 12,
+          digest: `sha256:${"a".repeat(64)}`,
+        },
       ]);
     });
 
@@ -119,12 +132,36 @@ describe("InstallApi", () => {
     });
 
     it("unpacks a gzip-tar into the destination directory", async () => {
-      routes["https://x/tool.tar.gz"] = await tarball({ "tool/tool": "payload" });
+      const payload = await tarball({ "tool/tool": "payload" });
+      routes["https://x/tool.tar.gz"] = payload;
       const target = path.join(scratch, "unpacked");
-      await api.downloadFile("https://x/tool.tar.gz", target, { type: "gzip-tar" });
+      const digest = `sha256:${crypto.createHash("sha256").update(payload).digest("hex")}`;
+      await api.downloadFile("https://x/tool.tar.gz", target, { type: "gzip-tar", digest });
       expect(fs.readFileSync(path.join(target, "tool", "tool"), "utf8")).toBe("payload");
       // The archive itself is not left in the install.
       expect(fs.readdirSync(target)).toEqual(["tool"]);
+    });
+
+    it("rejects a download before writing or extracting a checksum mismatch", async () => {
+      routes["https://x/wrong.tar.gz"] = await tarball({ "tool/tool": "payload" });
+      const target = path.join(scratch, "wrong");
+      await expectAsync(
+        api.downloadFile("https://x/wrong.tar.gz", target, {
+          type: "gzip-tar",
+          digest: `sha256:${"0".repeat(64)}`,
+        }),
+      ).toBeRejectedWithError(/published checksum/);
+      expect(fs.existsSync(target)).toBe(false);
+    });
+
+    it("verifies a file that an adapter already downloaded", async () => {
+      const target = path.join(scratch, "tool");
+      fs.writeFileSync(target, "payload");
+      const digest = `sha256:${crypto.createHash("sha256").update("payload").digest("hex")}`;
+      await expectAsync(api.verifyFileChecksum(target, digest)).toBeResolved();
+      await expectAsync(
+        api.verifyFileChecksum(target, `sha256:${"0".repeat(64)}`),
+      ).toBeRejectedWithError(/published checksum/);
     });
 
     it("refuses a type it does not know", async () => {
@@ -211,6 +248,25 @@ describe("InstallApi", () => {
         /did not say which file/,
       );
       expect(fs.existsSync(path.join(storageRoot, "ide-custom"))).toBe(false);
+    });
+
+    it("allows a bundled server adapter to install only companion tools", async () => {
+      const hooked = withHook(
+        async ({ storagePath }) => {
+          fs.writeFileSync(path.join(storagePath, "tool"), "tool");
+          return { version: "1.0.0" };
+        },
+        { bundledServer: true, managedServerDisplayName: "Custom Toolchain" },
+      );
+
+      await managed.install("ide-custom");
+
+      const install = managed.installFor(hooked);
+      expect(install.binaryPath).toBe(null);
+      expect(install.modulePath).toBe(null);
+      expect(fs.readFileSync(path.join(install.directory, "tool"), "utf8")).toBe("tool");
+      expect(managed.describe(hooked).displayName).toBe("Custom Toolchain");
+      expect(managed.describe(hooked).hasFallback).toBe(true);
     });
 
     it("reports failure and leaves nothing behind when the hook throws", async () => {

@@ -26,14 +26,14 @@ export type DownloadedFileType = "uncompressed" | "gzip" | "gzip-tar" | "zip";
 export interface GithubRelease {
   version: string;
   tag: string;
-  assets: Array<{ name: string; url: string; size: number }>;
+  assets: Array<{ name: string; url: string; size: number; digest?: string }>;
 }
 /**
  * The capabilities an adapter uses to fetch its own server. Named after
  * `zed_extension_api`, and handed to `installServer` rather than imported.
  *
- * `downloadFile` cannot verify a checksum for you — an adapter using it owns
- * that, unlike the descriptor path where verification is mandatory.
+ * Pass a published digest to `downloadFile`, or verify an existing file with
+ * `verifyFileChecksum`, when a custom installer owns download verification.
  */
 export interface InstallApi {
   latestGithubRelease(
@@ -47,9 +47,10 @@ export interface InstallApi {
   downloadFile(
     url: string,
     destination: string,
-    options?: { type?: DownloadedFileType },
+    options?: { type?: DownloadedFileType; digest?: string },
   ): Promise<string>;
   makeFileExecutable(path: string): Promise<void>;
+  verifyFileChecksum(path: string, digest: string): Promise<void>;
   setServerInstallationStatus(status: ServerInstallationStatus): void;
 }
 export interface ServerInstallContext {
@@ -67,8 +68,8 @@ export interface AdapterInstallResult {
   module?: string;
 }
 export interface ManagedServerInstall {
-  version: string;
-  source: "github-release" | "npm";
+  version: string | null;
+  source: "github-release" | "npm" | "adapter";
   installedAt: string;
   directory: string;
   /** Absolute path of the executable, for a github-release source. */
@@ -102,8 +103,8 @@ export type ManagedServerDescriptor =
   | {
       source: "npm";
       displayName?: string;
-      /** Registry packages to extract side by side; the first decides the version. */
-      packages: string[];
+      /** Registry packages to extract side by side; object entries pin their own version. */
+      packages: Array<string | { name: string; version?: string }>;
       /** Entry module, relative to the install directory. */
       module: string;
       /** True when the adapter package also ships the server, so uninstall falls back. */
@@ -134,7 +135,6 @@ export type LanguageServerFeature =
   | "callHierarchy"
   | "typeHierarchy"
   | "symbols"
-  | "outline"
   | "format"
   | "rename"
   | "codeActions"
@@ -147,13 +147,20 @@ export interface LanguageServerAdapter {
   /** Blanket LSP languageId fallback; prefer languageIdForScope or the built-in scope table. */
   languageId?: string;
   /** Per-grammar languageId override, consulted before the built-in scope table. */
-  languageIdForScope?(scopeName: string): string | undefined;
+  languageIdForScope?(
+    scopeName: string,
+    context: { editor: TextEditor; filePath: string | null },
+  ): string | undefined;
   grammarScopes: string[];
   documentSelector?: Array<{ language?: string; scheme?: string; pattern?: string }>;
   sessionScope?: "project-root" | "workspace";
   resolveServer(context: ServerResolutionContext): Promise<ServerLaunch | null>;
   /** Opt in to the editor installing, updating and removing this server. */
   managedServer?: ManagedServerDescriptor;
+  /** Name of a custom-managed toolchain when it differs from the language server. */
+  managedServerDisplayName?: string;
+  /** The package ships the server even when a managed install contains companion tools only. */
+  bundledServer?: boolean;
   /**
    * Fetch the server yourself, for a shape no descriptor models — several
    * binaries, an unusual release layout. Mutually exclusive with
@@ -170,11 +177,19 @@ export interface LanguageServerAdapter {
   }): unknown | Promise<unknown>;
   /** Settings pushed via workspace/didChangeConfiguration after initialize. */
   getSettings?(): unknown | Promise<unknown>;
+  /** Notifications sent after initialized and the initial settings push. */
+  getInitializedNotifications?(context: {
+    session: LanguageServerSession;
+    rootPath: string;
+    rootUri: string;
+  }):
+    | Array<{ method: string; params?: unknown }>
+    | Promise<Array<{ method: string; params?: unknown }>>;
   /** Config key paths whose changes re-push getSettings() to running sessions. */
   settingsKeyPaths?: string[];
   /** Config key paths read while resolving or initializing; changes restart every server. */
   restartKeyPaths?: string[];
-  getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
+  getWorkspaceConfiguration?(section?: string, resource?: string): unknown | Promise<unknown>;
   /** Handle a server-specific JSON-RPC request not implemented by the LSP core. */
   handleServerRequest?(
     method: string,
@@ -218,6 +233,11 @@ export interface LanguageServerSession {
   rootPath: string;
   state: "starting" | "running" | "failed" | "stopping" | "stopped";
   capabilities: Record<string, any>;
+  launch: ServerLaunch;
+  folders: Set<string>;
+  serverInfo?: { name: string; version?: string };
+  restartCount: number;
+  failureCount: number;
   /**
    * True when the session serves the request method for the editor, honoring
    * dynamic registrations and the adapter's feature switches. `feature` names
@@ -225,11 +245,33 @@ export interface LanguageServerSession {
    * derived from the method otherwise.
    */
   supports(method: string, editor?: TextEditor, feature?: LanguageServerFeature): boolean;
+  capabilityOptions(method: string, editor?: TextEditor): Record<string, any> | undefined;
   request(method: string, params?: unknown, options?: RequestOptions): Promise<any>;
   notify(method: string, params?: unknown): void;
+  onDidChangeState(
+    callback: (event: { session: LanguageServerSession; state: string; error?: Error }) => void,
+  ): Disposable;
+  onNotification(
+    callback: (event: { session: LanguageServerSession; method: string; params?: unknown }) => void,
+  ): Disposable;
+}
+export interface FileOperationEntry {
+  path: string;
+  isDirectory?: boolean;
+}
+export interface FileOperationPayload {
+  paths: string[];
+  entries?: FileOperationEntry[];
+}
+export interface RenameFileOperationPayload {
+  files: Array<{ oldPath: string; newPath: string; isDirectory?: boolean }>;
 }
 export interface LanguageServerService {
   registerAdapter(adapter: LanguageServerAdapter): Disposable;
+  adaptersForEditor(editor: TextEditor): LanguageServerAdapter[];
+  onDidChangeAdapters(
+    callback: (event: { adapter: LanguageServerAdapter; registered: boolean }) => void,
+  ): Disposable;
   sessionForEditor(editor: TextEditor): LanguageServerSession | null;
   /** Resolves once the session finished starting; null when absent, failed, or not running. */
   activeSessionForEditor(editor: TextEditor): Promise<LanguageServerSession | null>;
@@ -249,6 +291,9 @@ export interface LanguageServerService {
   onDidChangeSession(
     callback: (event: { session: LanguageServerSession; state: string; error?: Error }) => void,
   ): Disposable;
+  onDidChangeCapabilities(
+    callback: (event: { session: LanguageServerSession }) => void,
+  ): Disposable;
   onDidPublishDiagnostics(callback: (event: object) => void): Disposable;
   /** Fires when one of an adapter's feature switches changes. */
   onDidChangeFeatures(callback: (event: { adapter: LanguageServerAdapter }) => void): Disposable;
@@ -258,6 +303,9 @@ export interface LanguageServerService {
     feature: LanguageServerFeature,
     editor?: TextEditor,
   ): boolean;
+  onDidLog(
+    callback: (event: { session: LanguageServerSession; message: unknown }) => void,
+  ): Disposable;
   /**
    * Sends a request through the FIRST session serving that editor, with no
    * capability check. Where several servers can serve a grammar, pick one with
@@ -294,7 +342,17 @@ export interface LanguageServerService {
   onDidChangeServerInstallation(
     fn: (event: { adapterId: string; status: ServerInstallationStatus }) => void,
   ): Disposable;
-  applyWorkspaceEdit(edit: object, label?: string): Promise<boolean>;
+  applyWorkspaceEdit(
+    edit: object,
+    label?: string,
+    session?: LanguageServerSession,
+  ): Promise<boolean>;
+  willCreateFiles(payload: FileOperationPayload): Promise<boolean>;
+  willRenameFiles(payload: RenameFileOperationPayload): Promise<boolean>;
+  willDeleteFiles(payload: FileOperationPayload): Promise<boolean>;
+  didCreateFiles(payload: FileOperationPayload): void;
+  didRenameFiles(payload: RenameFileOperationPayload): void;
+  didDeleteFiles(payload: FileOperationPayload): void;
   /**
    * Opens a notebook for language servers: each capable session receives LSP
    * notebook sync, the cell editors route through every provider, and cell

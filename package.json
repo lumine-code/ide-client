@@ -162,6 +162,11 @@
       "versions": {
         "^1.0.0": "consumeStatusBar"
       }
+    },
+    "tree-view.file-operations": {
+      "versions": {
+        "^1.0.0": "consumeTreeViewFileOperations"
+      }
     }
   },
   "dependencies": {

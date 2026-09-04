@@ -7,7 +7,7 @@ Registers a language server with the editor. The adapter says how to launch it a
 | Version     | `1.0.0`                                           |
 | Provided by | `provideIdeClient()` returning the client service |
 | Consumed by | `consumeIdeClient(client)`                        |
-| Owner       | `ide-client` (bundled)                            |
+| Owner       | `ide-client`                                      |
 
 An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, `semantic-tokens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
 
@@ -39,11 +39,19 @@ interface LanguageServerAdapter {
   resolveServer(context: ServerResolutionContext): Promise<ServerLaunch | null>;
 
   languageId?: string;
-  languageIdForScope?(scopeName: string): string | undefined;
+  languageIdForScope?(
+    scopeName: string,
+    context: { editor: TextEditor; filePath: string | null },
+  ): string | undefined;
   documentSelector?: Array<{ language?: string; scheme?: string; pattern?: string }>;
   sessionScope?: "project-root" | "workspace";
   getInitializationOptions?(context: { rootPath: string; rootUri: string }): unknown;
   getSettings?(): unknown;
+  getInitializedNotifications?(context: {
+    session: LanguageServerSession;
+    rootPath: string;
+    rootUri: string;
+  }): Array<{ method: string; params?: unknown }>;
   settingsKeyPaths?: string[];
   restartKeyPaths?: string[];
   getWorkspaceConfiguration?(section?: string, resource?: string): unknown;
@@ -59,6 +67,8 @@ interface LanguageServerAdapter {
   ): void;
   features?: Partial<Record<LanguageServerFeature, boolean>>;
   managedServer?: ManagedServerDescriptor;
+  managedServerDisplayName?: string;
+  bundledServer?: boolean;
   installServer?(context: ServerInstallContext): Promise<AdapterInstallResult>;
   latestServerVersion?(api: InstallApi): Promise<string | null>;
   transformDocumentText?(text: string, context: { editor: TextEditor; uri: string }): string;
@@ -96,7 +106,8 @@ The service you receive:
 | `getSessions()`                                                   | Every session.                                                                           |
 | `request(editor, method, params, opts)`                           | Sends a request through the **first** session serving that editor, unchecked. See below. |
 | `onDidChangeSession(fn)`                                          | `{ session, state, error? }` on every state transition.                                  |
-| `onDidPublishDiagnostics(fn)`                                     | Raw `textDocument/publishDiagnostics` payloads.                                          |
+| `onDidChangeCapabilities(fn)`                                     | `{ session }` after a server dynamically registers or unregisters a capability.          |
+| `onDidPublishDiagnostics(fn)`                                     | Normalized pushed or pulled diagnostics, after the adapter transform.                    |
 | `onDidChangeFeatures(fn)`                                         | `{ adapter }` when one of an adapter's feature switches changes.                         |
 | `featureEnabled(adapter, feature, editor?)`                       | Whether that feature is on for that adapter, in that editor's scope.                     |
 | `onDidLog(fn)`, `getLog(adapterId)`                               | Server stderr and protocol log.                                                          |
@@ -109,6 +120,8 @@ The service you receive:
 | `serverInstallationStatus(adapterId)`                             | What is happening to that server right now, or `null`.                                   |
 | `onDidChangeServerInstallation(fn)`                               | `{ adapterId, status }` as an install proceeds.                                          |
 | `applyWorkspaceEdit(edit, label)`                                 | Applies an LSP `WorkspaceEdit` to the workspace.                                         |
+| `willCreateFiles`, `willRenameFiles`, `willDeleteFiles`           | Prepares a file operation through every matching server; `false` cancels it.             |
+| `didCreateFiles`, `didRenameFiles`, `didDeleteFiles`              | Reports a completed file operation to every matching server.                             |
 | `openNotebookDocument(descriptor)`                                | Opens a notebook for language servers; see "Notebook documents" below.                   |
 | `adaptersForNotebook(filePath)`                                   | The adapters serving an open notebook — the stand-down question, notebook-shaped.        |
 | `cellUri(notebookPath, cellId)`, `parseCellUri(uri)`              | The `vscode-notebook-cell:` URI vocabulary, e.g. for configuration scope URIs.           |
@@ -179,21 +192,27 @@ A `"project-root"` server that declares `workspace.workspaceFolders.supported` *
 
 `adaptersForEditor` answers a different question, and it is the one a package outside the hub usually has: is anything already covering this editor? It reads the registration rather than the session, so it is settled the moment the adapter package activates and does not flicker while a server starts, dies, or is restarted. A linter that shells out to the same tool a server serves — `linter-ruff` beside `ide-ruff` — asks this, matches an adapter `id`, and returns no messages for that editor rather than reporting every violation twice. Pair it with `onDidChangeAdapters`, since an adapter that registers after the editor was last handled leaves the duplicate on screen until something asks for another pass.
 
-The `languageId` sent to the server is resolved in order: `languageIdForScope(scopeName)`, then the built-in scope table, then the blanket `languageId`. Override only the level you actually need.
+The `languageId` sent to the server is resolved in order: `languageIdForScope(scopeName, { editor, filePath })`, then path-aware built-ins, then the scope table, then the blanket `languageId`. The context is what lets one grammar scope distinguish `.js` from `.jsx`.
 
 `getSettings` is pushed as `workspace/didChangeConfiguration` after initialize, and re-pushed whenever a config key listed in `settingsKeyPaths` changes. Changes received while a session is starting are coalesced and pushed once it reaches `running`, so its initialization snapshot cannot make a newer setting disappear. A key read by `resolveServer` or `getInitializationOptions` belongs in `restartKeyPaths` instead: the manager serializes and coalesces those changes, restarts every root, and starts a previously unavailable server for files that are already open. A change matching both lists restarts without first pushing settings to the process being replaced. Without either list the settings are sent once and never refreshed.
+
+`getInitializedNotifications` returns protocol-extension notifications that must follow `initialized` and the initial settings push, such as `css/customDataChanged`. They are written to the connection in array order before the session becomes available to feature providers.
 
 `handleServerRequest` and `handleServerNotification` cover protocol extensions owned by one server rather than LSP itself. Core client handlers still take precedence; the adapter sees only otherwise-unhandled traffic. Requests must return the JSON-RPC result the server expects, while notifications are also emitted through `session.onNotification` after the adapter observes them.
 
 The core handlers include server-initiated `workspace/workspaceFolders`. Its result is the same current folder list sent during initialize, so a server may query it later without an adapter hook. The client also sends folder-change notifications to sessions that declare support for them.
 
-`transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
+`transformDocumentText` can adapt an editor's text before `didOpen`, `didChange`, and `didSave`, including notebook cell text. An adapter that uses it receives full-document changes so the server never sees a mixture of transformed and original text. `restoreDocumentText` reverses the adaptation in formatting, rename, and workspace edits before they reach the editor. A transform must preserve line positions outside the text it intentionally hides.
 
 `transformDiagnostics` is the adapter's last word on what its server reported, for the diagnostic a server insists on and its own users do not want — `ide-json` drops "Comments are not permitted in JSON" with it. Every route arrives at the same funnel, push notifications and pulled reports alike, so what it returns is what is stored, emitted, counted and handed to a code-action request as context; there is no unfiltered copy behind it. Returning the array unchanged is free. Prefer it over `transformDocumentText` whenever the goal is what the server _says_ rather than what it _sees_: hiding text costs a reversal in every edit that comes back, and one that survives a reformat is rarely writable.
 
 `session.supports(method, editor)` honours dynamic registrations, so ask it rather than reading `capabilities` yourself when a server registers capabilities after initialize. It also honours the feature switches below, which is why it is the only correct way to ask.
 
 `transformServerCapabilities` is the escape hatch for a server that under- or over-reports what it can do.
+
+Workspace diagnostics use the same storage and linter funnel as pushed and document-pulled reports. A server declaring `diagnosticProvider.workspaceDiagnostics` is queried as soon as it starts, after relevant edits, settings changes and `workspace/diagnostic/refresh`; full and partial reports replace a URI's messages, unchanged reports preserve them, and result IDs remain separate from the per-document pull stream.
+
+The `tree-view.file-operations` service supplies the user-operation boundary that filesystem watchers cannot: matching servers receive `workspace/willCreateFiles`, `workspace/willRenameFiles` or `workspace/willDeleteFiles` before the operation, and their non-overlapping edits are preflighted together. A failed server or conflicting edit cancels the tree operation before any preparation is applied. Completed operations then emit the matching `workspace/did*Files` notification; ordinary project watcher events still cover external create, update and delete changes.
 
 ## Notebook documents
 
@@ -230,7 +249,7 @@ type ManagedServerDescriptor =
   | {
       source: "npm";
       displayName?: string;
-      packages: string[]; // extracted side by side; the first decides the version
+      packages: Array<string | { name: string; version?: string }>;
       module: string; // entry module, relative to the install directory
       bundled?: boolean; // the package also ships the server, so uninstall falls back
     };
@@ -256,6 +275,7 @@ Four things are worth knowing before writing a descriptor:
 - **`checksum` is stated, not inferred.** `"none"` records a source that publishes nothing to verify against; texlab is one today. Making that a value in the descriptor keeps the gap visible in the adapter instead of being a step the installer quietly skips.
 - **`binary` is a base name.** Archives put it at the root or one directory down, and it is searched for rather than predicted. Set `assetType: "binary"` when the release asset is the executable itself; it is installed under this base name and made executable on macOS and Linux.
 - **An npm source is an upgrade tier when the package already ships the server.** Set `bundled: true` and keep the dependency: the pinned copy stays the floor, so uninstalling drops back to it and can never leave the user with nothing. `ide-pyright` works this way.
+- **An npm companion can pin its own version.** A string keeps the old behavior — the first package follows the selected server version and later packages use `latest`; use `{ name, version }` for a companion that must stay inside a compatible range.
 
 Descriptors are validated at `registerAdapter`, not at install time, so a typo surfaces when the package activates.
 
@@ -270,26 +290,30 @@ async installServer({ storagePath, api }) {
   api.setServerInstallationStatus("downloading");
   const release = await api.latestGithubRelease("owner/tool");
   const asset = release.assets.find((a) => a.name === assetForThisPlatform());
-  await api.downloadFile(asset.url, storagePath, { type: "gzip-tar" });
+  await api.downloadFile(asset.url, storagePath, {
+    type: "gzip-tar",
+    digest: asset.digest,
+  });
   await api.makeFileExecutable(`${storagePath}/tool`);
   return { version: release.version, binary: "tool" };
 }
 ```
 
-Fill `storagePath` and return `{ version, binary }` or `{ version, module }` naming what to launch, relative to the install directory. Everything else is unchanged: the hub stages, swaps atomically, rolls back on failure, writes the same `install.json`, stops and restarts sessions in the same order, and reports the same status. It is the descriptor path without the descriptor.
+Fill `storagePath` and return `{ version, binary }` or `{ version, module }` naming what to launch, relative to the install directory. An adapter with `bundledServer: true` may return only `{ version }` when the managed payload contains companion tools and the server itself remains the bundled copy; `managedServerDisplayName` gives that toolchain its own label in Manage Servers. Everything else is unchanged: the hub stages, swaps atomically, restores an interrupted swap from its backup on the next start, writes the same `install.json`, stops and restarts sessions in the same order, and reports the same status. It is the descriptor path without the descriptor.
 
-| primitive                                         |                                                                                                       |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `latestGithubRelease(repository, { preRelease })` | `{ version, tag, assets: [{ name, url, size }] }`; throws with the status rather than resolving empty |
-| `githubReleaseByTag(repository, tag)`             | the same shape                                                                                        |
-| `npmPackageLatestVersion(name)`                   |                                                                                                       |
-| `npmPackageInstalledVersion(name, directory)`     | `null` when absent                                                                                    |
-| `npmInstallPackage(name, version, directory)`     | installs the package and its tree; `--omit=dev --ignore-scripts`                                      |
-| `downloadFile(url, destination, { type })`        | `type` ∈ `uncompressed` \| `gzip` \| `gzip-tar` \| `zip`                                              |
-| `makeFileExecutable(path)`                        | no-op on Windows                                                                                      |
-| `setServerInstallationStatus(status)`             | `checking` \| `downloading` \| `installing` \| `failed` \| `null`                                     |
+| primitive                                          |                                                                                                                                    |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `latestGithubRelease(repository, { preRelease })`  | `{ version, tag, assets: [{ name, url, size, digest? }] }`; throws with the status rather than resolving empty                     |
+| `githubReleaseByTag(repository, tag)`              | the same shape                                                                                                                     |
+| `npmPackageLatestVersion(name)`                    |                                                                                                                                    |
+| `npmPackageInstalledVersion(name, directory)`      | `null` when absent                                                                                                                 |
+| `npmInstallPackage(name, version, directory)`      | installs the package and its tree; `--omit=dev --ignore-scripts`                                                                   |
+| `downloadFile(url, destination, { type, digest })` | verifies an optional `algorithm:hex` digest before writing or extracting; `type` ∈ `uncompressed` \| `gzip` \| `gzip-tar` \| `zip` |
+| `makeFileExecutable(path)`                         | no-op on Windows                                                                                                                   |
+| `verifyFileChecksum(path, digest)`                 | verifies an already-written file against an `algorithm:hex` digest                                                                 |
+| `setServerInstallationStatus(status)`              | `checking` \| `downloading` \| `installing` \| `failed` \| `null`                                                                  |
 
-Two things to know. **`managedServer` and `installServer` are mutually exclusive** — declaring both leaves it ambiguous which one fills the staging directory, and is rejected at `registerAdapter`. And **`downloadFile` does not verify checksums**: the descriptor path verifies every download against what its source publishes, and it cannot force that on a caller, so an adapter reaching for the primitive owns its own verification. Zed has the same gap; stating it is the difference.
+Two things to know. **`managedServer` and `installServer` are mutually exclusive** — declaring both leaves it ambiguous which one fills the staging directory, and is rejected at `registerAdapter`. And a custom installer still owns verification policy: pass the release asset's `digest` to `downloadFile`, or call `verifyFileChecksum` for a file acquired another way; omitting both is an explicit unverified download.
 
 Implement `latestServerVersion(api)` as well if the Manage Servers list should have a version to compare against; without it the row simply reports what is installed.
 

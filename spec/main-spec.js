@@ -11,6 +11,7 @@ const fakeStatusBar = (tiles) => ({
     return tile;
   },
 });
+const ServerSession = require("../lib/server-session");
 
 describe("ide-client package", () => {
   beforeEach(async () => {
@@ -31,6 +32,12 @@ describe("ide-client package", () => {
     expect(typeof service.activeSessionsForEditor).toBe("function");
     expect(typeof service.activeSessionForFeature).toBe("function");
     expect(typeof service.applyWorkspaceEdit).toBe("function");
+    expect(typeof service.willCreateFiles).toBe("function");
+    expect(typeof service.willRenameFiles).toBe("function");
+    expect(typeof service.willDeleteFiles).toBe("function");
+    expect(typeof service.didCreateFiles).toBe("function");
+    expect(typeof service.didRenameFiles).toBe("function");
+    expect(typeof service.didDeleteFiles).toBe("function");
   });
 
   describe("reporting a missing server", () => {
@@ -170,6 +177,37 @@ describe("ide-client package", () => {
     }
   });
 
+  it("bridges the tree-view file-operation lifecycle to the manager", async () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    const callbacks = new Map();
+    const service = {};
+    for (const name of [
+      "onWillCreateFiles",
+      "onWillRenameFiles",
+      "onWillDeleteFiles",
+      "onDidCreateFiles",
+      "onDidRenameFiles",
+      "onDidDeleteFiles",
+    ]) {
+      service[name] = (callback) => {
+        callbacks.set(name, callback);
+        return { dispose: () => callbacks.delete(name) };
+      };
+    }
+    const will = spyOn(main.manager, "willRenameFiles").and.resolveTo(true);
+    const did = spyOn(main.manager, "didRenameFiles");
+    const registration = main.consumeTreeViewFileOperations(service);
+    const payload = { files: [{ oldPath: "before", newPath: "after" }] };
+
+    expect(await callbacks.get("onWillRenameFiles")(payload)).toBe(true);
+    callbacks.get("onDidRenameFiles")(payload);
+
+    expect(will).toHaveBeenCalledWith(payload);
+    expect(did).toHaveBeenCalledWith(payload);
+    registration.dispose();
+    expect(callbacks.size).toBe(0);
+  });
+
   it("takes only the transient half of busy-signal", () => {
     const main = lumine.packages.getActivePackage("ide-client").mainModule;
     const provider = { add() {}, remove() {}, changeTitle() {}, clear() {}, dispose() {} };
@@ -255,6 +293,46 @@ describe("ide-client package", () => {
     expect(delegate.batches[0].messages[1].severity).toBe("hint");
     expect(delegate.batches[0].messages[1].tags).toEqual(["unnecessary"]);
     expect(indieConfig.markerInvalidation).toBe("never");
+    registration.dispose();
+  });
+
+  it("publishes workspace diagnostics for unopened files and preserves unchanged reports", () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    const batches = [];
+    const registration = main.consumeLinterRegistry(() => ({
+      setMessages: (filePath, messages) => batches.push({ filePath, messages }),
+      dispose() {},
+    }));
+    const adapter = {
+      id: "workspace-diagnostics",
+      displayName: "Workspace Diagnostics",
+      grammarScopes: ["source.js"],
+      resolveServer: async () => null,
+    };
+    const session = new ServerSession(main.manager, adapter, "C:\\project", {});
+    const filePath = require("path").resolve("project", "unopened.ts");
+    const uri = require("url").pathToFileURL(filePath).href;
+    const diagnostic = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      message: "workspace error",
+    };
+
+    session.processWorkspaceDiagnosticItems([
+      { uri, version: null, kind: "full", resultId: "w1", items: [diagnostic] },
+    ]);
+    session.processWorkspaceDiagnosticItems([
+      { uri, version: null, kind: "unchanged", resultId: "w2" },
+    ]);
+
+    expect(batches.length).toBe(1);
+    expect(batches[0].filePath).toBe(filePath);
+    expect(batches[0].messages.map(({ excerpt }) => excerpt)).toEqual(["workspace error"]);
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "w2" }]);
+
+    session.processWorkspaceDiagnosticItems([
+      { uri, version: null, kind: "full", resultId: "w3", items: [] },
+    ]);
+    expect(batches.at(-1)).toEqual({ filePath, messages: [] });
     registration.dispose();
   });
 

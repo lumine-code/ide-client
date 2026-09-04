@@ -34,6 +34,7 @@ const makeSession = (respond, capabilities = {}) => ({
   state: "running",
   capabilities,
   supports: () => true,
+  capabilityOptions: () => capabilities.codeLensProvider,
   requests: [],
   request(method, params) {
     this.requests.push({ method, params });
@@ -145,6 +146,23 @@ describe("CodeLensProvider", () => {
     expect(sent.params.data).toBe(7);
   });
 
+  it("resolves a lens whose capability was registered dynamically", async () => {
+    const session = makeSession((method, params) => {
+      if (method === "textDocument/codeLens") return [lspLens(0, null, { data: 9 })];
+      if (method === "codeLens/resolve")
+        return { ...params, command: { title: "Dynamic", command: "test.dynamic" } };
+      return null;
+    });
+    session.capabilityOptions = () => ({ resolveProvider: true });
+    provider = new CodeLensProvider(makeManager(session));
+
+    const [placeholder] = await provider.codeLenses(editor);
+    const resolved = await provider.resolveCodeLens(placeholder);
+
+    expect(resolved.title).toBe("Dynamic");
+    expect(session.requests.some(({ method }) => method === "codeLens/resolve")).toBe(true);
+  });
+
   it("does not resolve against a server that never offered to", async () => {
     const session = makeSession((method) =>
       method === "textDocument/codeLens" ? [lspLens(0, null)] : null,
@@ -191,10 +209,10 @@ describe("CodeLensProvider", () => {
     expect(invalidated.calls.count()).toBe(1);
 
     manager.changeSession({}, "stopped");
-    expect(invalidated.calls.count()).toBe(1);
+    expect(invalidated.calls.count()).toBe(2);
 
     manager.changeSession({}, "running");
-    expect(invalidated.calls.count()).toBe(2);
+    expect(invalidated.calls.count()).toBe(3);
     await flush();
   });
 });

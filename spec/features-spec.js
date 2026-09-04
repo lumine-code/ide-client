@@ -139,6 +139,16 @@ describe("feature switches", () => {
       expect(session.supports("typeHierarchy/supertypes", editor)).toBe(false);
       expect(session.supports("typeHierarchy/subtypes", editor)).toBe(false);
     });
+    it("checks the server provider behind generic raw routes", () => {
+      const editor = stubEditor();
+      const absent = sessionFor(adapterFor("ide-a"), {});
+      const links = sessionFor(adapterFor("ide-b"), { documentLinkProvider: {} });
+      const colors = sessionFor(adapterFor("ide-c"), { colorProvider: true });
+      expect(absent.supports("textDocument/documentLink", editor)).toBe(false);
+      expect(links.supports("textDocument/documentLink", editor)).toBe(true);
+      expect(absent.supports("textDocument/documentColor", editor)).toBe(false);
+      expect(colors.supports("textDocument/colorPresentation", editor)).toBe(true);
+    });
   });
 
   describe("routing between two servers", () => {
@@ -331,5 +341,16 @@ describe("diagnostics switch", () => {
     expect(messages.get(FILE)).toBeUndefined();
     lumine.config.set("ide-a.features.diagnostics", true);
     expect(messages.get(FILE).map(({ excerpt }) => excerpt)).toEqual(["broken"]);
+  });
+
+  it("refreshes pull diagnostics when their feature switch changes", () => {
+    session.refreshDiagnostics = jasmine.createSpy("refreshDiagnostics");
+    manager.sessions.set("ide-a:root", session);
+
+    lumine.config.set("ide-a.features.diagnostics", false);
+    lumine.config.set("ide-a.features.diagnostics", true);
+
+    manager.sessions.clear();
+    expect(session.refreshDiagnostics.calls.count()).toBe(2);
   });
 });

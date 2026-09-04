@@ -515,6 +515,130 @@ describe("ServerSession against a fake server", () => {
     expect(manager.diagnosticsFor(session, uri)).toEqual([]);
   });
 
+  it("pulls workspace diagnostics with previous result ids", async () => {
+    const uri = C.pathToUri(path.join(tempDir, "workspace-error.js"));
+    const diagnostic = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      message: "workspace error",
+    };
+    const session = await startSession({
+      capabilities: {
+        diagnosticProvider: { identifier: "workspace", workspaceDiagnostics: true },
+      },
+      responseSequences: {
+        "workspace/diagnostic": [
+          { items: [{ uri, version: null, kind: "full", resultId: "w1", items: [diagnostic] }] },
+          { items: [{ uri, version: null, kind: "unchanged", resultId: "w2" }] },
+        ],
+      },
+    });
+    await until(() => manager.diagnosticsFor(session, uri).length === 1);
+
+    session.refreshDiagnostics();
+    await until(async () => {
+      const received = await receivedMessages(session);
+      return received.filter(({ method }) => method === "workspace/diagnostic").length >= 2;
+    });
+
+    const requests = (await receivedMessages(session)).filter(
+      ({ method }) => method === "workspace/diagnostic",
+    );
+    expect(requests[0].params.identifier).toBe("workspace");
+    expect(requests[0].params.previousResultIds).toEqual([]);
+    expect(requests[1].params.previousResultIds).toEqual([{ uri, value: "w1" }]);
+    expect(manager.diagnosticsFor(session, uri)).toEqual([diagnostic]);
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "w2" }]);
+  });
+
+  it("publishes partial workspace diagnostic reports through the same funnel", async () => {
+    const uri = C.pathToUri(path.join(tempDir, "partial-error.js"));
+    const diagnostic = {
+      range: { start: { line: 1, character: 0 }, end: { line: 1, character: 1 } },
+      message: "partial error",
+    };
+    const session = await startSession({
+      capabilities: { diagnosticProvider: { workspaceDiagnostics: true } },
+      workspaceDiagnosticPartial: {
+        items: [{ uri, version: null, kind: "full", resultId: "partial", items: [diagnostic] }],
+      },
+      responses: { "workspace/diagnostic": { items: [] } },
+    });
+
+    await until(() => manager.diagnosticsFor(session, uri).length === 1);
+
+    expect(manager.diagnosticsFor(session, uri)).toEqual([diagnostic]);
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "partial" }]);
+  });
+
+  it("starts workspace diagnostics from a dynamic diagnostic registration", async () => {
+    const uri = C.pathToUri(path.join(tempDir, "dynamic-workspace-error.js"));
+    const session = await startSession({
+      responses: {
+        "workspace/diagnostic": {
+          items: [{ uri, version: null, kind: "full", resultId: "dynamic", items: [] }],
+        },
+      },
+    });
+    await session.request("test/notify", {
+      jsonrpc: "2.0",
+      id: 991,
+      method: "client/registerCapability",
+      params: {
+        registrations: [
+          {
+            id: "dynamic-diagnostics",
+            method: "textDocument/diagnostic",
+            registerOptions: {
+              identifier: "dynamic-workspace",
+              workspaceDiagnostics: true,
+            },
+          },
+        ],
+      },
+    });
+
+    await until(async () =>
+      (await receivedMessages(session)).some(
+        ({ method, params }) =>
+          method === "workspace/diagnostic" && params.identifier === "dynamic-workspace",
+      ),
+    );
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "dynamic" }]);
+  });
+
+  it("pulls workspace diagnostics when they are enabled in any grammar scope", () => {
+    const adapter = {
+      id: "ide-a",
+      displayName: "Scoped",
+      grammarScopes: ["source.js"],
+      resolveServer: async () => null,
+    };
+    const session = new ServerSession(manager, adapter, tempDir, {});
+    session.state = "running";
+    session.capabilities = { diagnosticProvider: { workspaceDiagnostics: true } };
+    lumine.config.set("ide-a.features.diagnostics", false);
+    lumine.config.set("ide-a.features.diagnostics", true, { scopeSelector: ".source.js" });
+
+    expect(session.supportsWorkspaceDiagnostics()).toBe(true);
+
+    lumine.config.unset("ide-a.features.diagnostics", { scopeSelector: ".source.js" });
+    lumine.config.unset("ide-a.features.diagnostics");
+  });
+
+  it("keeps document and workspace diagnostic result ids in separate streams", () => {
+    const uri = C.pathToUri(path.join(tempDir, "separate-result-ids.js"));
+    const session = createSession();
+    session.state = "running";
+    session.publishDiagnosticReport(uri, { kind: "full", resultId: "document-1", items: [] });
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([]);
+
+    session.processWorkspaceDiagnosticItems([
+      { uri, version: null, kind: "full", resultId: "workspace-1", items: [] },
+    ]);
+
+    expect(session.previousWorkspaceDiagnosticResultIds()).toEqual([{ uri, value: "workspace-1" }]);
+  });
+
   it("does not pull diagnostics while the adapter feature is disabled", async () => {
     const filePath = path.join(tempDir, "quiet.js");
     fs.writeFileSync(filePath, "const fine = true;\n");
@@ -727,6 +851,53 @@ describe("ServerSession against a fake server", () => {
     ).toBe(true);
     expect(fs.readFileSync(target, "utf8")).toBe("source");
     expect(fs.readFileSync(ignored, "utf8")).toBe("ignored");
+  });
+
+  it("applies text edits after creating their target", async () => {
+    const filePath = path.join(tempDir, "created-and-edited.txt");
+    const uri = C.pathToUri(filePath);
+    const applied = await manager.applyWorkspaceEdit({
+      documentChanges: [
+        { kind: "create", uri },
+        {
+          textDocument: { uri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "created",
+            },
+          ],
+        },
+      ],
+    });
+    const editor = lumine.workspace.getTextEditors().find((item) => item.getPath() === filePath);
+    expect(applied).toBe(true);
+    expect(editor.getText()).toBe("created");
+  });
+
+  it("opens a rename target only after the source has moved", async () => {
+    const source = path.join(tempDir, "rename-source.txt");
+    const target = path.join(tempDir, "rename-target.txt");
+    fs.writeFileSync(source, "source text");
+    const targetUri = C.pathToUri(target);
+    spyOn(lumine.window, "confirm").and.resolveTo(0);
+    const applied = await manager.applyWorkspaceEdit({
+      documentChanges: [
+        { kind: "rename", oldUri: C.pathToUri(source), newUri: targetUri },
+        {
+          textDocument: { uri: targetUri, version: null },
+          edits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+              newText: "updated",
+            },
+          ],
+        },
+      ],
+    });
+    const editor = lumine.workspace.getTextEditors().find((item) => item.getPath() === target);
+    expect(applied).toBe(true);
+    expect(editor.getText()).toBe("updated text");
   });
 
   it("hands a pulled diagnostic report to the adapter with the editor it belongs to", async () => {
@@ -1173,6 +1344,75 @@ describe("ServerSession against a fake server", () => {
     expect(session.state).toBe("stopped");
     expect(session.process.exitCode).toBe(0);
     expect(session.process.signalCode).toBeNull();
+  });
+
+  it("prepares Windows batch servers through cmd.exe with escaped arguments", () => {
+    const prepared = ServerSession.prepareServerSpawn(
+      "C:\\tools\\server.cmd",
+      ["plain", "value & whoami", "%PATH%"],
+      { shell: false },
+      "win32",
+    );
+    expect(prepared.command.toLowerCase()).toContain("cmd");
+    expect(prepared.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(prepared.args[3]).toContain("^&");
+    expect(prepared.args[3]).toContain("^%");
+    expect(prepared.options.windowsVerbatimArguments).toBe(true);
+    expect(prepared.options.shell).toBe(false);
+  });
+
+  it("starts a language server through a Windows .cmd shim", async () => {
+    if (process.platform !== "win32") return;
+    const batch = path.join(tempDir, "fake-server.cmd");
+    fs.writeFileSync(batch, `@echo off\r\n"${process.execPath}" "${FIXTURE}" %*\r\n`);
+    const launch = {
+      command: batch,
+      args: [JSON.stringify({})],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+    const session = new ServerSession(
+      manager,
+      {
+        id: "batch",
+        displayName: "Batch Server",
+        grammarScopes: ["source.js"],
+        resolveServer: () => launch,
+      },
+      tempDir,
+      launch,
+    );
+    sessions.push(session);
+
+    await session.start();
+
+    expect((await receivedMessages(session)).some(({ method }) => method === "initialize")).toBe(
+      true,
+    );
+  });
+
+  it("retries a refused socket until the spawned server starts listening", async () => {
+    const EventEmitter = require("events");
+    const net = require("net");
+    let attempts = 0;
+    spyOn(net, "connect").and.callFake(() => {
+      attempts++;
+      const socket = new EventEmitter();
+      socket.destroy = jasmine.createSpy("destroy");
+      if (attempts === 1) {
+        const error = Object.assign(new Error("not ready"), { code: "ECONNREFUSED" });
+        queueMicrotask(() => socket.emit("error", error));
+      } else {
+        queueMicrotask(() => socket.emit("connect"));
+      }
+      return socket;
+    });
+    const session = createSession();
+
+    const socket = await session.connectSocket("127.0.0.1", 2087);
+
+    expect(attempts).toBe(2);
+    expect(socket).toBe(session.socket);
+    session.socket = null;
   });
 
   it("cancels a socket connection that is still opening", async () => {

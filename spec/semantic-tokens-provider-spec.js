@@ -131,6 +131,19 @@ describe("SemanticTokensProvider", () => {
     expect(tokens).toEqual([{ row: 0, column: 0, length: 5, type: "string", modifiers: [] }]);
   });
 
+  it("requests another full result when the previous response has no result id", async () => {
+    const session = makeSession(() => ({ data: [0, 0, 5, 0, 0] }));
+    provider = new SemanticTokensProvider(makeManager(session));
+
+    await provider.semanticTokens(editor);
+    await provider.semanticTokens(editor);
+
+    expect(session.requests.map(({ method }) => method)).toEqual([
+      "textDocument/semanticTokens/full",
+      "textDocument/semanticTokens/full",
+    ]);
+  });
+
   it("sends a plain full request when the server offers no delta", async () => {
     const session = makeSession(
       (method) =>
@@ -247,15 +260,15 @@ describe("SemanticTokensProvider", () => {
     expect(invalidated.calls.count()).toBe(1);
 
     manager.changeSession({}, "stopped");
-    expect(invalidated.calls.count()).toBe(1);
+    expect(invalidated.calls.count()).toBe(2);
 
     manager.changeSession({}, "running");
-    expect(invalidated.calls.count()).toBe(2);
+    expect(invalidated.calls.count()).toBe(3);
 
     // A capability registered after startup was absent when the consumer last
     // asked, so it concluded the server could not classify this file at all.
     manager.registerCapabilities({});
-    expect(invalidated.calls.count()).toBe(3);
+    expect(invalidated.calls.count()).toBe(4);
     await flush();
   });
 });

@@ -6,23 +6,13 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 
 ## Features
 
-- **Sessions**: starts one language server per project root, or one per workspace, lazily when a matching editor opens.
-- **Several servers per file**: every adapter matching a grammar runs, so a type checker and a linter serve the same buffer together.
-- **Feature switches**: each adapter package can turn individual capabilities off for its own server, which is also how one of two servers is chosen to format, rename, or fill the outline.
-- **Overlap removal**: answers that several servers repeat, such as a shared signature line, are shown once.
-- **Transports**: spawns servers over stdio, IPC, or socket connections with JSON-RPC framing.
-- **Synchronization**: keeps open documents in sync with incremental or full-text updates.
-- **Diagnostics**: supports both pushed and LSP 3.17 pull diagnostics, forwarding results to the linter package when installed.
-- **Completions**: serves language-server completions to autocomplete.
-- **Symbols**: serves document and project symbols to the symbol hub.
-- **Inlay hints**: serves the server's inferred-type and parameter-name labels to the inlay-hints package, which renders them.
-- **Code lens**: serves the server's actionable command links to the code-lens package, which renders them.
-- **Semantic tokens**: serves the server's classification of the identifiers to the semantic-tokens package, which layers it over the grammar highlighting.
-- **Server list**: lists every running server with its state and what it covers — a project root, the workspace, or a file opened outside the project — and restarts, stops, or opens the log of any of them without leaving the list.
-- **Server details**: reports what a server says about itself — the process it runs in, the command that started it, the documents and diagnostics it holds, and the capabilities it advertised.
-- **Managed servers**: downloads, updates and removes the language servers whose adapter says where to get them, verifying each download against the checksum its source publishes.
-- **Status bar**: counts the running servers in a permanent status-bar item, flags the failed ones, and opens the server list on click.
-- **Logging**: keeps a per-server log buffer with optional protocol tracing, and reports a server that has exited more often than it may be restarted with a way straight into its log.
+- **Sessions**: starts every matching adapter lazily, scoped to a project root or the workspace, and safely serializes restarts and shutdown.
+- **Protocol lifecycle**: negotiates document and notebook synchronization, dynamic capabilities, workspace folders, watched files, file operations, progress and three JSON-RPC transports.
+- **Language features**: supplies completions, symbols, hover, signatures, references, formatting, rename, code actions, inlay hints, code lens and semantic tokens to their UI packages.
+- **Diagnostics**: combines pushed, per-document pull and workspace pull reports and forwards their current state to the linter package.
+- **Feature routing**: merges answers where useful and lets adapter switches choose one of several servers where only one result can apply.
+- **Managed servers**: downloads, verifies, updates, rolls back and removes server binaries, npm packages and companion toolchains.
+- **Inspection**: exposes server state, capabilities, documents, diagnostics, logs and lifecycle actions through the server list and status bar.
 
 ## Installation
 
@@ -61,7 +51,7 @@ Language servers are registered by adapter packages that consume the `ide-client
 
 ```js
 consumeIdeClient(ideClient) {
-  return languageServer.registerAdapter({
+  return ideClient.registerAdapter({
     id: "example",
     displayName: "Example Language Server",
     grammarScopes: ["source.example"],
@@ -131,6 +121,7 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `linter.registry`: consumed to push server diagnostics into the linter UI, one delegate per server.
 - `busy-signal`: consumed to surface server work-done progress on the busy indicator.
 - `status-bar`: consumed to show the running servers in an item that opens the server list.
+- `tree-view.file-operations`: consumed to prepare and report create, rename and delete operations so servers can update references before a move.
 
 ## Contributing
 

@@ -49,6 +49,13 @@ function handle(message) {
     send(params);
     return reply(id, null);
   }
+  if (method === "workspace/diagnostic" && config.workspaceDiagnosticPartial) {
+    send({
+      jsonrpc: "2.0",
+      method: "$/progress",
+      params: { token: params.partialResultToken, value: config.workspaceDiagnosticPartial },
+    });
+  }
   if (method === "test/crash") process.exit(1);
   if (method === "textDocument/didOpen") {
     for (const item of config.onOpen || []) send(item);

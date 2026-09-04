@@ -357,6 +357,17 @@ describe("RefactorProvider", () => {
       expect(result).toEqual(expected);
     }
   });
+  it("does not prepare a rename while the rename feature is disabled", async () => {
+    const session = sessionWith(() => lspRange(0, 6, 11), {
+      renameProvider: { prepareProvider: true },
+    });
+    session.supports = () => false;
+    spyOn(session, "request").and.callThrough();
+    const provider = new RefactorProvider(managerWith(session));
+
+    expect(await provider.prepareRename(stubEditor(), { row: 0, column: 8 })).toBeNull();
+    expect(session.request).not.toHaveBeenCalled();
+  });
 });
 
 describe("IntentionsProvider", () => {

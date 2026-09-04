@@ -144,6 +144,14 @@ describe("ManagedServers", () => {
       ).toThrowError(/managedServer\.checksum/);
     });
 
+    it("rejects a malformed versioned npm package entry", () => {
+      expect(() =>
+        manager.registerAdapter(
+          adapterFor(npmDescriptor({ packages: ["testpkg", { name: "companion", version: 2 }] })),
+        ),
+      ).toThrowError(/managedServer\.packages/);
+    });
+
     it("rejects a github-release descriptor with no assetFor or binary", () => {
       expect(() =>
         manager.registerAdapter(adapterFor(githubDescriptor({ assetFor: undefined }))),
@@ -351,6 +359,36 @@ describe("ManagedServers", () => {
       expect(fs.existsSync(install.modulePath)).toBe(true);
     });
 
+    it("pins a companion package to its own descriptor version", async () => {
+      await servePackage({ "package/server.js": "module.exports = 1;\n" });
+      const companionArchive = await tarball({ "package/index.js": "module.exports = 2;\n" });
+      const companionMetadata = {
+        version: "2.4.0",
+        dist: {
+          tarball: "https://registry.npmjs.org/companion/-/companion-2.4.0.tgz",
+          integrity: integrityOf(companionArchive),
+        },
+      };
+      routes["https://registry.npmjs.org/companion/%5E2.0.0"] = JSON.stringify(companionMetadata);
+      routes[companionMetadata.dist.tarball] = companionArchive;
+      register(
+        npmDescriptor({
+          packages: ["testpkg", { name: "companion", version: "^2.0.0" }],
+        }),
+      );
+
+      const record = await managed.install("ide-test");
+
+      expect(record.packages).toEqual(["testpkg", "companion"]);
+      expect(requested).toContain("https://registry.npmjs.org/companion/%5E2.0.0");
+      expect(
+        fs.readFileSync(
+          path.join(storageRoot, "ide-test", "node_modules", "companion", "index.js"),
+          "utf8",
+        ),
+      ).toBe("module.exports = 2;\n");
+    });
+
     it("discards a package that does not match its integrity hash", async () => {
       await servePackage({ "package/server.js": "x" });
       const metadata = JSON.parse(routes[metadataUrl]);
@@ -495,6 +533,20 @@ describe("ManagedServers", () => {
 
       await managed.sweep();
 
+      expect(fs.readdirSync(storageRoot)).toEqual(["ide-test"]);
+    });
+
+    it("restores an interrupted swap when only the backup remains", async () => {
+      const backup = path.join(storageRoot, `.backup-ide-test-${process.pid}-1`);
+      fs.mkdirSync(backup, { recursive: true });
+      fs.writeFileSync(path.join(backup, "install.json"), "{}\n");
+      fs.mkdirSync(path.join(storageRoot, `.stage-ide-test-${process.pid}-1`), {
+        recursive: true,
+      });
+
+      await managed.sweep();
+
+      expect(fs.existsSync(path.join(storageRoot, "ide-test", "install.json"))).toBe(true);
       expect(fs.readdirSync(storageRoot)).toEqual(["ide-test"]);
     });
 

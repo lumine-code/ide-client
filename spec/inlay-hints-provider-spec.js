@@ -165,15 +165,15 @@ describe("InlayHintsProvider", () => {
     expect(invalidated.calls.count()).toBe(1);
 
     manager.changeSession({}, "stopped");
-    expect(invalidated.calls.count()).toBe(1);
+    expect(invalidated.calls.count()).toBe(2);
 
     manager.changeSession({}, "running");
-    expect(invalidated.calls.count()).toBe(2);
+    expect(invalidated.calls.count()).toBe(3);
 
     // A capability registered after startup was absent when the consumer last
     // asked, so it concluded the server could not serve hints at all.
     manager.registerCapabilities({});
-    expect(invalidated.calls.count()).toBe(3);
+    expect(invalidated.calls.count()).toBe(4);
     await flush();
   });
 });

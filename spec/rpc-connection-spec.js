@@ -3,6 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const RpcConnection = require("../lib/rpc-connection");
+const FileCancellationSender = require("../lib/file-cancellation-sender");
 
 function frame(message) {
   const body = Buffer.from(JSON.stringify(message));
@@ -187,6 +188,25 @@ describe("RpcConnection", () => {
         fileConnection.dispose();
       }
       expect(fs.existsSync(folder)).toBe(false);
+    });
+
+    it("leaves foreign files in a pre-existing cancellation directory alone", async () => {
+      const folder = path.join(
+        os.tmpdir(),
+        "ide-client-cancellation-spec",
+        `foreign-${Date.now()}`,
+      );
+      fs.mkdirSync(folder, { recursive: true });
+      const foreign = path.join(folder, "settings.json");
+      fs.writeFileSync(foreign, "keep");
+      const sender = new FileCancellationSender(folder);
+      await sender.sendCancellation(null, 1);
+
+      sender.dispose();
+
+      expect(fs.readFileSync(foreign, "utf8")).toBe("keep");
+      expect(fs.existsSync(path.join(folder, "cancellation-1.tmp"))).toBe(false);
+      fs.rmSync(folder, { recursive: true, force: true });
     });
   });
 
