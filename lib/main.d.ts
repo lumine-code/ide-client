@@ -1,4 +1,4 @@
-import type { Disposable, TextEditor } from "lumine";
+import type { Disposable, Range as LumineRange, TextEditor } from "lumine";
 
 export type ServerTransport = "stdio" | "ipc" | "socket";
 export interface ServerLaunch {
@@ -227,6 +227,19 @@ export interface RequestOptions {
    * `false` to abandon the request without telling the server about it.
    */
   cancelOnServer?: boolean;
+}
+export interface HyperclickSuggestion {
+  range: LumineRange | LumineRange[];
+  callback(): void | Promise<unknown>;
+}
+export interface DocumentLinkHyperclickProvider {
+  priority: number;
+  providerName: string;
+  getSuggestionForWord(
+    editor: TextEditor,
+    text: string,
+    range: LumineRange,
+  ): Promise<HyperclickSuggestion | undefined>;
 }
 export interface LanguageServerSession {
   adapter: LanguageServerAdapter;

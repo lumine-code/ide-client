@@ -1,0 +1,64 @@
+{
+  "menu": [
+    {
+      "label": "Packages",
+      "submenu": [
+        {
+          "label": "IDE Client",
+          "submenu": [
+            {
+              "label": "Servers",
+              "command": "ide-client:servers"
+            },
+            {
+              "label": "Manage Servers",
+              "command": "ide-client:manage-servers"
+            },
+            {
+              "label": "Restart",
+              "command": "ide-client:restart"
+            },
+            {
+              "label": "Show Log",
+              "command": "ide-client:show-log"
+            },
+            {
+              "label": "Open Custom Servers File",
+              "command": "ide-client:open-custom-servers-file"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "label": "Toggle Problems",
+              "command": "ide-client:toggle-problems"
+            },
+            {
+              "label": "Format",
+              "command": "ide-client:format"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "label": "Fold Server Ranges",
+              "command": "ide-client:fold-server-ranges"
+            },
+            {
+              "label": "Expand Selection Range",
+              "command": "ide-client:expand-selection-range"
+            },
+            {
+              "label": "Select Linked Ranges",
+              "command": "ide-client:select-linked-ranges"
+            },
+            {
+              "label": "Color Presentation…",
+              "command": "ide-client:color-presentation"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

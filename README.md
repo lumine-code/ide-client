@@ -8,7 +8,7 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 
 - **Sessions**: starts every matching adapter lazily, scoped to a project root or the workspace, and safely serializes restarts and shutdown.
 - **Protocol lifecycle**: negotiates document and notebook synchronization, dynamic capabilities, workspace folders, watched files, file operations, progress and three JSON-RPC transports.
-- **Language features**: supplies completions, symbols, hover, signatures, references, formatting, rename, code actions, inlay hints, code lens and semantic tokens to their UI packages.
+- **Language features**: supplies completions, symbols, hover, signatures, references, document links, folding, selection ranges, linked editing, colors, formatting, rename, code actions, inlay hints, code lens and semantic tokens.
 - **Diagnostics**: combines pushed, per-document pull and workspace pull reports and forwards their current state to the linter package.
 - **Feature routing**: merges answers where useful and lets adapter switches choose one of several servers where only one result can apply.
 - **Managed servers**: downloads, verifies, updates, rolls back and removes server binaries, npm packages and companion toolchains.
@@ -28,7 +28,11 @@ Commands available in `lumine-workspace`:
 - `ide-client:toggle-problems`: open the linter panel with the server diagnostics,
 - `ide-client:format`: format the active document,
 - `ide-client:show-log`: open the active server's log in a new editor,
-- `ide-client:open-custom-servers-file`: open the custom servers configuration file.
+- `ide-client:open-custom-servers-file`: open the custom servers configuration file,
+- `ide-client:fold-server-ranges`: fold every range the active file's language server reports,
+- `ide-client:expand-selection-range`: expand each selection to the next parent range from the language server,
+- `ide-client:select-linked-ranges`: select every range linked to the symbol under the cursor,
+- `ide-client:color-presentation`: choose and apply a language-server spelling for the color under the cursor.
 
 Commands available in `.ide-client-session-menu`:
 
@@ -44,6 +48,10 @@ Commands available in `.ide-client-managed-servers`:
 - `ide-client:update-server`: install the newest release of the selected server,
 - `ide-client:uninstall-server`: remove the copy the editor installed,
 - `ide-client:check-server-updates`: look up the newest release of every installable server.
+
+Commands available in `.ide-client-color-presentations`:
+
+- `ide-client:apply-color-presentation`: apply the selected color spelling.
 
 ## Usage
 
@@ -118,6 +126,7 @@ Tweak the server list, its details step, and the status-bar item from your style
 - `code-lens.provider`: provided to the code lens UI to serve the actionable links shown above the code.
 - `inlay-hints.provider`: provided to the inlay hints UI to serve the labels a server computes for the visible rows.
 - `semantic-tokens.provider`: provided to the semantic tokens UI to serve the server's classification of the identifiers.
+- `hyperclick.provider`: provided to hyperclick to follow language-server document links, resolving lazy targets only when clicked.
 - `linter.registry`: consumed to push server diagnostics into the linter UI, one delegate per server.
 - `busy-signal`: consumed to surface server work-done progress on the busy indicator.
 - `status-bar`: consumed to show the running servers in an item that opens the server list.

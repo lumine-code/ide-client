@@ -9,7 +9,7 @@ Registers a language server with the editor. The adapter says how to launch it a
 | Consumed by | `consumeIdeClient(client)`                        |
 | Owner       | `ide-client`                                      |
 
-An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, `semantic-tokens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
+An adapter package is small — a manifest entry, a `resolveServer`, and a grammar list. Everything a language server can do then arrives in the editor at once, because `ide-client` implements the UI-facing services (`autocomplete.provider`, `symbol.provider`, `hover.provider`, `hyperclick.provider`, `refactor.provider`, `find-references.provider`, `intentions.list`, `code-lens.provider`, `inlay-hints.provider`, `semantic-tokens.provider`, and the four `code-format.*`) on every adapter's behalf. You do not implement any of them.
 
 The full types are `lib/main.d.ts` in this package.
 
@@ -152,7 +152,7 @@ Two reasons to hold the session rather than re-pick per request. A reply's `data
 
 Some capabilities the hub advertises on a consumer's behalf, because fragments are merged once at initialize and an external package cannot contribute one: `textDocument.callHierarchy` and `textDocument.typeHierarchy` are both declared for `hierarchy-view`.
 
-The unchecked request API is still a client-capability contract. `ide-client` advertises the generic raw-request routes it implements even when no built-in pane consumes them: document links, document colours, folding ranges, selection ranges, and linked-editing ranges. Keep those capability objects truthful and complete. Servers in the wild sometimes read an optional child such as `textDocument.foldingRange.lineFoldingOnly` without first checking its parent, so an omitted shape can break a valid raw request inside the server.
+The unchecked request API is still a client-capability contract. Document links back the `hyperclick.provider`; the `ide-client:fold-server-ranges`, `ide-client:expand-selection-range`, `ide-client:select-linked-ranges`, and `ide-client:color-presentation` commands expose folding ranges, selection ranges, linked-editing ranges, document colours and color presentations without another package. These routes remain available through the raw request API as well. Keep their capability objects truthful and complete: servers in the wild sometimes read an optional child such as `textDocument.foldingRange.lineFoldingOnly` without first checking its parent, so an omitted shape can break a valid request inside the server.
 
 ## Minimal example
 

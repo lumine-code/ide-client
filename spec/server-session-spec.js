@@ -74,6 +74,7 @@ describe("ServerSession against a fake server", () => {
     expect(initialize.params.capabilities.textDocument.publishDiagnostics.tagSupport).toEqual({
       valueSet: [1, 2],
     });
+    expect(initialize.params.capabilities.workspace.workspaceEdit.failureHandling).toBe("abort");
     expect(initialize.params.capabilities.textDocument.diagnostic).toEqual({
       dynamicRegistration: false,
       relatedDocumentSupport: true,
@@ -620,6 +621,8 @@ describe("ServerSession against a fake server", () => {
     lumine.config.set("ide-a.features.diagnostics", true, { scopeSelector: ".source.js" });
 
     expect(session.supportsWorkspaceDiagnostics()).toBe(true);
+    spyOn(lumine.grammars, "selectGrammar").and.returnValue({ scopeName: "source.js" });
+    expect(manager.featureEnabledForPath(adapter, "diagnostics", "unopened.js")).toBe(true);
 
     lumine.config.unset("ide-a.features.diagnostics", { scopeSelector: ".source.js" });
     lumine.config.unset("ide-a.features.diagnostics");

@@ -20,6 +20,7 @@
     "docs",
     "keymaps",
     "lib",
+    "menus",
     "spec",
     "styles"
   ],
@@ -144,6 +145,11 @@
     "semantic-tokens.provider": {
       "versions": {
         "1.0.0": "provideSemanticTokens"
+      }
+    },
+    "hyperclick.provider": {
+      "versions": {
+        "1.0.0": "provideHyperclick"
       }
     }
   },

@@ -38,6 +38,9 @@ describe("ide-client package", () => {
     expect(typeof service.didCreateFiles).toBe("function");
     expect(typeof service.didRenameFiles).toBe("function");
     expect(typeof service.didDeleteFiles).toBe("function");
+    const hyperclick = main.provideHyperclick();
+    expect(hyperclick.providerName).toBe("ide-client");
+    expect(typeof hyperclick.getSuggestionForWord).toBe("function");
   });
 
   describe("reporting a missing server", () => {
@@ -150,6 +153,10 @@ describe("ide-client package", () => {
     expect(commands.map(({ name }) => name)).toContain("ide-client:toggle-problems");
     expect(commands.map(({ name }) => name)).toContain("ide-client:restart");
     expect(commands.map(({ name }) => name)).toContain("ide-client:servers");
+    expect(commands.map(({ name }) => name)).toContain("ide-client:fold-server-ranges");
+    expect(commands.map(({ name }) => name)).toContain("ide-client:expand-selection-range");
+    expect(commands.map(({ name }) => name)).toContain("ide-client:select-linked-ranges");
+    expect(commands.map(({ name }) => name)).toContain("ide-client:color-presentation");
   });
 
   it("satisfies the autocomplete provider contract", () => {
@@ -306,7 +313,7 @@ describe("ide-client package", () => {
     const adapter = {
       id: "workspace-diagnostics",
       displayName: "Workspace Diagnostics",
-      grammarScopes: ["source.js"],
+      grammarScopes: ["source.ts"],
       resolveServer: async () => null,
     };
     const session = new ServerSession(main.manager, adapter, "C:\\project", {});
