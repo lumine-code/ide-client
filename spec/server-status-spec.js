@@ -77,10 +77,8 @@ describe("ide-client status-bar item", () => {
     expect(view.element.style.display).toBe("");
   });
 
-  it("sits outside the source-control tiles", () => {
-    // Lower priority is further out on the right panel, so this puts it right
-    // of git-panel (310). See packages/status-bar/README.md.
-    expect(tiles[0].priority).toBeLessThan(310);
+  it("uses the code-intelligence slot between editor modes and file identity", () => {
+    expect(tiles[0].priority).toBe(250);
   });
 
   it("badges the failed servers", () => {
