@@ -18,6 +18,8 @@ Starts language servers lazily when matching editors open and exposes UI-indepen
 
 To install `ide-client` search for it in the Install pane of the Lumine settings, or run the command `lumine --install lumine-code/ide-client`.
 
+Install the separate `file-operations` package if language servers should be allowed to create, rename or delete files through `WorkspaceEdit`. Without it, text edits and all other language features continue to work, while resource operations are not advertised.
+
 ## Commands
 
 Commands available in `lumine-workspace`:
@@ -72,7 +74,7 @@ consumeIdeClient(ideClient) {
 
 Commands are spawned directly with `shell: false`; arguments belong in `args`. The default session scope is one server per project root; a server whose capabilities declare multi-root support is handed further folders instead of being started again, so `sessionScope: "workspace"` is needed only for servers with no notion of a root. Editors without a file path are not attached to language servers. The complete public shapes are documented in `lib/main.d.ts`.
 
-Text edits from `WorkspaceEdit` are applied to versioned editor buffers by this package. Filesystem inspection and resource operations are delegated to the bundled `file-operations` infrastructure instead; `ide-client` never falls back to reading or mutating paths itself. The executor's lifecycle lets the hub retarget buffers and replace private staging noise with durable LSP file events, and a session advertises create, rename and delete support only when that executor was available during initialize.
+Text edits from `WorkspaceEdit` are applied to versioned editor buffers by this package. Filesystem inspection and resource operations are delegated to the optional `file-operations` infrastructure instead; `ide-client` never falls back to reading or mutating paths itself. The executor's lifecycle lets the hub retarget buffers and replace private staging noise with durable LSP file events, and a session advertises create, rename and delete support only when that executor was available during initialize.
 
 ## Configuration
 
