@@ -285,9 +285,9 @@ describe("diagnostics switch", () => {
   let messages;
   let registration;
 
-  const push = (excerpt) =>
+  const pushFor = (filePath, excerpt) =>
     manager.publishDiagnostics(session, {
-      uri: C.pathToUri(FILE),
+      uri: C.pathToUri(filePath),
       diagnostics: [
         {
           severity: 1,
@@ -296,6 +296,7 @@ describe("diagnostics switch", () => {
         },
       ],
     });
+  const push = (excerpt) => pushFor(FILE, excerpt);
 
   beforeEach(async () => {
     await lumine.packages.activatePackage("ide-client");
@@ -316,6 +317,7 @@ describe("diagnostics switch", () => {
   afterEach(async () => {
     registration.dispose();
     lumine.config.unset("ide-a.features.diagnostics");
+    lumine.config.unset("ide-a.features.diagnostics", { scopeSelector: ".source.js" });
     await lumine.packages.deactivatePackage("ide-client");
   });
 
@@ -341,6 +343,21 @@ describe("diagnostics switch", () => {
     expect(messages.get(FILE)).toBeUndefined();
     lumine.config.set("ide-a.features.diagnostics", true);
     expect(messages.get(FILE).map(({ excerpt }) => excerpt)).toEqual(["broken"]);
+  });
+
+  it("publishes workspace results only for grammar scopes with diagnostics enabled", () => {
+    const pythonFile = path.join(__dirname, "example.py");
+    spyOn(lumine.grammars, "selectGrammar").and.callFake((filePath) => ({
+      scopeName: filePath === FILE ? "source.js" : "source.python",
+    }));
+    lumine.config.set("ide-a.features.diagnostics", false);
+    lumine.config.set("ide-a.features.diagnostics", true, { scopeSelector: ".source.js" });
+
+    pushFor(FILE, "visible");
+    pushFor(pythonFile, "hidden");
+
+    expect(messages.get(FILE).map(({ excerpt }) => excerpt)).toEqual(["visible"]);
+    expect(messages.get(pythonFile)).toEqual([]);
   });
 
   it("refreshes pull diagnostics when their feature switch changes", () => {
