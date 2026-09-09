@@ -1341,7 +1341,7 @@ describe("LanguageServerManager capabilities", () => {
     manager.sessions.clear();
   });
 
-  it("notifies running sessions about workspace folder changes", () => {
+  it("notifies running sessions about workspace folder changes", async () => {
     const notifications = [];
     const session = {
       state: "running",
@@ -1352,7 +1352,7 @@ describe("LanguageServerManager capabilities", () => {
     };
     manager.sessions.set("fake:root", session);
     manager.knownRoots = [];
-    manager.projectPathsChanged();
+    await manager.projectPathsChanged();
     const roots = lumine.project.getPaths();
     if (roots.length) {
       expect(notifications[0].method).toBe("workspace/didChangeWorkspaceFolders");
@@ -1719,7 +1719,7 @@ describe("LanguageServerManager restart", () => {
     const first = manager.restart(session);
     const concurrent = manager.restart(session);
     expect(concurrent).toBe(first);
-    await Promise.resolve();
+    await flushPromises();
     expect(adapter.resolveServer.calls.count()).toBe(1);
     resolution.resolve({ command: "server" });
 
@@ -1953,6 +1953,9 @@ describe("LanguageServerManager restart", () => {
     });
 
     const restarting = manager.restartAdapter(adapter);
+    // The first resolver must have entered before a later generation can
+    // supersede its pending result; observation readiness precedes that entry.
+    await flushPromises();
     const joined = manager.restartAdapter(adapter);
     expect(joined).toBe(restarting);
     firstResolution.resolve({ command: "stale-server" });
@@ -2322,6 +2325,7 @@ describe("LanguageServerManager restart", () => {
     const resolution = deferred();
     let open = true;
     const rootPath = lumine.project.getPaths()[0];
+    await lumine.project.getWatcherPromise(rootPath);
     const filePath = path.join(rootPath, "pending.test");
     const editor = {
       getPath: () => filePath,
