@@ -2277,7 +2277,7 @@ describe("ServerSession against a fake server", () => {
     expect(fs.readFileSync(source, "utf8")).toBe("source");
   });
 
-  it("retargets an editor from an executor's private rename path", async () => {
+  it("retargets a confirmed rename without exposing the executor's private path", async () => {
     const source = path.join(tempDir, "private-rename-source.txt");
     const target = path.join(tempDir, "private-rename-target.txt");
     const recovery = path.join(tempDir, ".lumine-move-private");
@@ -2288,8 +2288,8 @@ describe("ServerSession against a fake server", () => {
     const plan = {
       describe: () => [{ status: "apply" }],
       executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
-        editor.getBuffer().setPath(recovery);
-        fs.renameSync(source, target);
+        fs.renameSync(source, recovery);
+        fs.renameSync(recovery, target);
         return {
           status: "applied",
           effects: [{ kind: "rename", oldPath: source, newPath: target, isDirectory: false }],
@@ -2313,7 +2313,7 @@ describe("ServerSession against a fake server", () => {
     expect(reattach.calls.count()).toBe(1);
   });
 
-  it("restores an open editor's logical path after executor-private deletion", async () => {
+  it("keeps an open editor's logical path after executor-private deletion", async () => {
     const source = path.join(tempDir, "private-delete-source.txt");
     const recovery = path.join(tempDir, ".lumine-delete-private");
     fs.writeFileSync(source, "source");
@@ -2323,8 +2323,8 @@ describe("ServerSession against a fake server", () => {
     const plan = {
       describe: () => [{ status: "apply" }],
       executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
-        editor.getBuffer().setPath(recovery);
-        fs.rmSync(source);
+        fs.renameSync(source, recovery);
+        fs.rmSync(recovery);
         return {
           status: "applied",
           effects: [{ kind: "delete", path: source, isDirectory: false }],
@@ -2343,10 +2343,10 @@ describe("ServerSession against a fake server", () => {
       }),
     ).toBe(true);
     expect(editor.getPath()).toBe(source);
-    expect(reattach.calls.count()).toBe(1);
+    expect(reattach.calls.count()).toBe(0);
   });
 
-  it("restores an editor path after a private move rolls back without effects", async () => {
+  it("keeps an editor path after a private move rolls back without effects", async () => {
     const source = path.join(tempDir, "rolled-back-source.txt");
     const recovery = path.join(tempDir, ".lumine-move-rolled-back");
     fs.writeFileSync(source, "source");
@@ -2356,7 +2356,8 @@ describe("ServerSession against a fake server", () => {
     const plan = {
       describe: () => [{ status: "apply" }],
       executeNext: jasmine.createSpy("executeNext").and.callFake(async () => {
-        editor.getBuffer().setPath(recovery);
+        fs.renameSync(source, recovery);
+        fs.renameSync(recovery, source);
         return { status: "failed", reason: "copy failed and rolled back", effects: [] };
       }),
       dispose() {},
@@ -2375,7 +2376,7 @@ describe("ServerSession against a fake server", () => {
     expect(result.applied).toBe(false);
     expect(result.failureReason).toBe("copy failed and rolled back");
     expect(editor.getPath()).toBe(source);
-    expect(reattach.calls.count()).toBe(1);
+    expect(reattach.calls.count()).toBe(0);
   });
 
   it("rechecks an overwrite target immediately before the resource step", async () => {

@@ -72,18 +72,22 @@ describe("CustomServers", () => {
   });
 
   it("disposes a watcher whose activation finishes after disposal", async () => {
-    const api = require("lumine");
-    const watcher = { dispose: jasmine.createSpy("dispose") };
+    const watcher = {
+      path: filePath,
+      dispose: jasmine.createSpy("dispose"),
+      onDidChange() {},
+      onDidInvalidate() {},
+      onDidError() {},
+    };
     let resolveWatch;
-    spyOn(api, "watchPath").and.returnValue(
-      new Promise((resolve) => {
-        resolveWatch = resolve;
-      }),
-    );
+    watcher.ready = new Promise((resolve) => {
+      resolveWatch = resolve;
+    });
+    spyOn(lumine.fileWatchClient, "watchFile").and.returnValue(watcher);
 
     const activation = customServers.activate();
     customServers.dispose();
-    resolveWatch(watcher);
+    resolveWatch();
     await activation;
 
     expect(watcher.dispose).toHaveBeenCalled();

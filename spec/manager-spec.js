@@ -23,6 +23,29 @@ const lspRange = (row, start, end) => ({
   end: { line: row, character: end },
 });
 
+describe("LanguageServerManager watcher recovery", () => {
+  it("restarts only affected sessions once per recovery generation", () => {
+    const firstRoot = path.resolve("watch-recovery-first");
+    const secondRoot = path.resolve("watch-recovery-second");
+    const first = { adapter: { sessionScope: "root" }, folders: new Set([firstRoot]) };
+    const second = { adapter: { sessionScope: "root" }, folders: new Set([secondRoot]) };
+    const workspace = { adapter: { sessionScope: "workspace" } };
+    const controllers = new Map([first, second, workspace].map((session) => [session, {}]));
+    const manager = Object.create(LanguageServerManager.prototype);
+    manager.allSessions = () => [first, second, workspace];
+    manager.controllerForSession = (session) => controllers.get(session);
+    manager.restart = jasmine.createSpy("restart").and.resolveTo();
+    spyOn(lumine.project, "getPaths").and.returnValue([firstRoot, secondRoot]);
+    manager.recoverFileWatching({ rootPaths: [firstRoot], generation: 1 });
+    manager.recoverFileWatching({ rootPaths: [firstRoot], generation: 1 });
+    expect(manager.restart.calls.allArgs()).toEqual([[first], [workspace]]);
+    manager.recoverFileWatching({ rootPaths: [secondRoot], generation: 1 });
+    expect(manager.restart.calls.allArgs()).toEqual([[first], [workspace], [second]]);
+    manager.recoverFileWatching({ rootPaths: [firstRoot], generation: 2 });
+    expect(manager.restart.calls.count()).toBe(5);
+  });
+});
+
 describe("LanguageServerManager adapters", () => {
   let manager;
   beforeEach(() => {
