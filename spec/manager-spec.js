@@ -46,6 +46,52 @@ describe("LanguageServerManager watcher recovery", () => {
   });
 });
 
+describe("LanguageServerManager external URL documents", () => {
+  let manager;
+
+  beforeEach(() => {
+    manager = Object.create(LanguageServerManager.prototype);
+  });
+
+  it("opens only supported external URL protocols", async () => {
+    spyOn(lumine.shell, "openExternal").and.resolveTo();
+    spyOn(lumine.notifications, "addWarning");
+
+    expect(await manager.showDocument({ uri: "https://example.com", external: true })).toEqual({
+      success: true,
+    });
+    expect(
+      await manager.showDocument({ uri: "mailto:issues@example.com", external: true }),
+    ).toEqual({ success: true });
+    expect(await manager.showDocument({ uri: "javascript:alert(1)", external: true })).toEqual({
+      success: false,
+    });
+
+    expect(lumine.shell.openExternal.calls.allArgs()).toEqual([
+      ["https://example.com/"],
+      ["mailto:issues@example.com"],
+    ]);
+    expect(lumine.notifications.addWarning).toHaveBeenCalledWith(
+      "The language server requested an unsupported external URL.",
+      { dismissable: true },
+    );
+  });
+
+  it("reports an operating-system failure without rejecting the LSP request", async () => {
+    const error = new Error("no handler");
+    spyOn(lumine.shell, "openExternal").and.rejectWith(error);
+    spyOn(lumine.notifications, "addWarning");
+
+    expect(await manager.showDocument({ uri: "https://example.com", external: true })).toEqual({
+      success: false,
+    });
+    expect(lumine.notifications.addWarning).toHaveBeenCalledWith(
+      "Unable to open the language server URL.",
+      { detail: error.message, dismissable: true },
+    );
+  });
+});
+
 describe("LanguageServerManager adapters", () => {
   let manager;
   beforeEach(() => {

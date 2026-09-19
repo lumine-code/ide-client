@@ -106,6 +106,26 @@ describe("DocumentFeatures", () => {
     expect(lumine.shell.openExternal).not.toHaveBeenCalled();
   });
 
+  it("opens a mailto document link and reports shell failures", async () => {
+    const session = makeSession(() => null);
+    features = new DocumentFeatures(makeManager(session));
+    const error = new Error("no mail client");
+    spyOn(lumine.shell, "openExternal").and.rejectWith(error);
+    spyOn(lumine.notifications, "addWarning");
+
+    expect(
+      await features.followDocumentLink(
+        session,
+        { range: lspRange(0, 0, 4), target: "mailto:issues@example.com" },
+        false,
+      ),
+    ).toBe(false);
+    expect(lumine.notifications.addWarning).toHaveBeenCalledWith(
+      "Unable to open the language server link.",
+      { detail: error.message, dismissable: true },
+    );
+  });
+
   it("reports a failed lazy document-link resolution without rejecting the click", async () => {
     const session = makeSession(() => Promise.reject(new Error("link expired")));
     features = new DocumentFeatures(makeManager(session));
