@@ -92,4 +92,42 @@ describe("CustomServers", () => {
 
     expect(watcher.dispose).toHaveBeenCalled();
   });
+
+  it("stops waiting for watcher readiness when activation is aborted", async () => {
+    const watcher = {
+      path: filePath,
+      dispose() {},
+      onDidChange() {},
+      onDidInvalidate() {},
+      onDidError() {},
+      ready: new Promise(() => {}),
+    };
+    spyOn(lumine.fileWatchClient, "watchFile").and.returnValue(watcher);
+    const controller = new AbortController();
+
+    const activation = customServers.activate({ signal: controller.signal });
+    controller.abort(new Error("cancelled"));
+
+    await expectAsync(activation).toBeRejectedWithError("cancelled");
+  });
+
+  it("observes an abort that happens while the watcher is being created", async () => {
+    const watcher = {
+      path: filePath,
+      dispose() {},
+      onDidChange() {},
+      onDidInvalidate() {},
+      onDidError() {},
+      ready: new Promise(() => {}),
+    };
+    const controller = new AbortController();
+    spyOn(lumine.fileWatchClient, "watchFile").and.callFake(() => {
+      controller.abort(new Error("cancelled during watch"));
+      return watcher;
+    });
+
+    await expectAsync(customServers.activate({ signal: controller.signal })).toBeRejectedWithError(
+      "cancelled during watch",
+    );
+  });
 });

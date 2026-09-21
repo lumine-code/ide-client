@@ -185,6 +185,14 @@ describe("ide-client package", () => {
     expect(typeof provider.getSuggestions).toBe("function");
   });
 
+  it("publishes a stable autocomplete facade", () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    const first = main.provideAutocomplete();
+
+    expect(main.provideAutocomplete()).toBe(first);
+    expect(typeof first.getSuggestions).toBe("function");
+  });
+
   it("consumes a service name that no other provided service nests under", () => {
     const { consumedServices } = lumine.packages.getLoadedPackage("ide-client").metadata;
     // A service named "x.y" is stored at the key path ["x"]["y"], so it is
