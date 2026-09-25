@@ -29,9 +29,6 @@
     "lumine": "^1.0.0",
     "node": ">=24"
   },
-  "backgroundTips": [
-    "{% if keys['ide-client:servers'] %}You can see every language server that is running, and restart any of them, with {{ 'ide-client:servers' | keystroke }}{% else %}Lumine speaks the Language Server Protocol. Install an ide package for your language to get completions, diagnostics, and go-to-definition.{% endif %}"
-  ],
   "scripts": {
     "test": "lumine --test spec",
     "lint": "eslint . --max-warnings 0",
@@ -150,6 +147,11 @@
     "hyperclick.provider": {
       "versions": {
         "1.0.0": "provideHyperclick"
+      }
+    },
+    "background-tips.provider": {
+      "versions": {
+        "1.0.0": "provideBackgroundTips"
       }
     }
   },
