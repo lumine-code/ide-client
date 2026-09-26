@@ -484,6 +484,17 @@ describe("ide-client package", () => {
     failureCount: 1,
   });
 
+  it("opens server logs with the plain-text grammar", async () => {
+    const main = lumine.packages.getActivePackage("ide-client").mainModule;
+    await lumine.packages.activatePackage("language-text");
+    spyOn(main.manager, "getLog").and.returnValue("server log");
+
+    const editor = await main.showLogForAdapter("ide-example");
+
+    expect(editor.getText()).toBe("server log");
+    expect(editor.getGrammar().scopeName).toBe("text.plain");
+  });
+
   // A notification button dismisses nothing on its own, and this banner sits
   // over the workspace center the log opens into.
   it("closes the banner it raised once the log it pointed at is open", async () => {

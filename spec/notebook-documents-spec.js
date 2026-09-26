@@ -146,9 +146,10 @@ describe("NotebookDocuments against a fake server", () => {
     const adapter = {
       id: "fake",
       displayName: "Fake Server",
-      // buildTextEditor's default grammar, so adaptersForEditor matches.
-      grammarScopes: ["text.plain.null-grammar"],
+      // buildCellEditor's plain-text grammar, so adaptersForEditor matches.
+      grammarScopes: ["text.plain"],
       languageId: "python",
+      languageIdForScope: (scopeName) => (scopeName === "text.plain" ? "python" : undefined),
       resolveServer: () => launch,
       ...extras,
     };
@@ -161,7 +162,9 @@ describe("NotebookDocuments against a fake server", () => {
   const ofMethod = async (method) =>
     (await received()).filter((message) => message.method === method);
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const languageText = await lumine.packages.activatePackage("language-text");
+    await languageText.resourceLoadPromise;
     jasmine.useRealClock();
     manager = new LanguageServerManager();
     notebooks = new NotebookDocuments(manager);
@@ -198,7 +201,7 @@ describe("NotebookDocuments against a fake server", () => {
     const editor = buildCellEditor("x = 1\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain" }],
     });
 
     await bridge.attached;
@@ -223,8 +226,9 @@ describe("NotebookDocuments against a fake server", () => {
     const adapter = {
       id: "fake",
       displayName: "Fake Server",
-      grammarScopes: ["text.plain.null-grammar"],
+      grammarScopes: ["text.plain"],
       languageId: "python",
+      languageIdForScope: (scopeName) => (scopeName === "text.plain" ? "python" : undefined),
       resolveServer: jasmine
         .createSpy("resolveServer")
         .and.rejectWith(new Error("notebook resolve failed")),
@@ -235,7 +239,7 @@ describe("NotebookDocuments against a fake server", () => {
     const editor = buildCellEditor("x = 1\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain" }],
     });
 
     await bridge.attached;
@@ -252,7 +256,7 @@ describe("NotebookDocuments against a fake server", () => {
     const bridge = notebooks.open({
       filePath: notebookPath,
       cells: [
-        { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" },
+        { id: "c1", kind: "code", editor: a, scopeName: "text.plain" },
         { id: "m1", kind: "markup", scopeName: "source.gfm" },
       ],
     });
@@ -285,7 +289,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("x = 1\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
 
@@ -309,7 +313,7 @@ describe("NotebookDocuments against a fake server", () => {
     const editor = buildCellEditor("secret = 1\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor, scopeName: "text.plain" }],
     });
     await bridge.attached;
 
@@ -327,8 +331,8 @@ describe("NotebookDocuments against a fake server", () => {
     registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
     const a = buildCellEditor("a\n");
     const b = buildCellEditor("b\n");
-    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" };
-    const cellB = { id: "c2", kind: "code", editor: b, scopeName: "text.plain.null-grammar" };
+    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain" };
+    const cellB = { id: "c2", kind: "code", editor: b, scopeName: "text.plain" };
     const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA] });
     await bridge.attached;
 
@@ -370,7 +374,7 @@ describe("NotebookDocuments against a fake server", () => {
   });
 
   it("versions one logical structure change once across two server projections", async () => {
-    const scopes = ["text.plain.null-grammar", "source.js"];
+    const scopes = ["text.plain", "source.js"];
     registerFakeAdapter(
       { capabilities: { notebookDocumentSync: RUFF_SYNC } },
       { id: "fake-python", displayName: "Python Server", grammarScopes: scopes },
@@ -453,7 +457,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     bridge.didSave();
@@ -467,7 +471,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     bridge.didSave();
@@ -481,7 +485,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     const cellUri = bridge.uriForCell("c1");
@@ -499,7 +503,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
 
@@ -523,9 +527,7 @@ describe("NotebookDocuments against a fake server", () => {
     expect(manager.allSessions().length).toBe(0);
 
     const a = buildCellEditor("import os\n");
-    await bridge.updateCells([
-      { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" },
-    ]);
+    await bridge.updateCells([{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }]);
 
     const opens = await ofMethod("notebookDocument/didOpen");
     expect(opens.length).toBe(1);
@@ -536,8 +538,8 @@ describe("NotebookDocuments against a fake server", () => {
   it("hands a late-built editor to the session's cell document", async () => {
     registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
     const a = buildCellEditor("a\n");
-    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" };
-    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain.null-grammar" };
+    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain" };
+    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain" };
     const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA, cellB] });
     await bridge.attached;
     const key = C.uriKey(bridge.uriForCell("c2"));
@@ -561,8 +563,8 @@ describe("NotebookDocuments against a fake server", () => {
   it("clears an editor-less cell's routing entry when the cell goes", async () => {
     registerFakeAdapter({ capabilities: { notebookDocumentSync: RUFF_SYNC } });
     const a = buildCellEditor("a\n");
-    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" };
-    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain.null-grammar" };
+    const cellA = { id: "c1", kind: "code", editor: a, scopeName: "text.plain" };
+    const cellB = { id: "c2", kind: "code", text: "b\n", scopeName: "text.plain" };
     const bridge = notebooks.open({ filePath: notebookPath, cells: [cellA, cellB] });
     await bridge.attached;
     const key = C.uriKey(bridge.uriForCell("c2"));
@@ -580,7 +582,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("import os\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     const record = [...notebooks.records][0];
@@ -624,7 +626,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("import os\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
 
@@ -642,7 +644,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([adapter]);
@@ -661,7 +663,7 @@ describe("NotebookDocuments against a fake server", () => {
     const a = buildCellEditor("a\n");
     const bridge = notebooks.open({
       filePath: notebookPath,
-      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain.null-grammar" }],
+      cells: [{ id: "c1", kind: "code", editor: a, scopeName: "text.plain" }],
     });
     await bridge.attached;
     expect(notebooks.adaptersForNotebook(notebookPath)).toEqual([adapter]);
